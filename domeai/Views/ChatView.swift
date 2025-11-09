@@ -11,6 +11,7 @@ import UIKit
 struct ChatView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var micButtonScale: CGFloat = 1.0
+    @State private var pendingDeleteMessage: Message? = nil
     
     var body: some View {
         NavigationStack {
@@ -25,21 +26,27 @@ struct ChatView: View {
                         ScrollViewReader { proxy in
                             ScrollView {
                                 LazyVStack(spacing: 8) {
-                                    ForEach(viewModel.messages) { message in
-                                        MessageBubble(message: message, maxWidth: geometry.size.width * 0.75)
-                                            .id(message.id)
-                                            .transition(.asymmetric(
-                                                insertion: .move(edge: message.isFromUser ? .trailing : .leading)
-                                                    .combined(with: .opacity),
-                                                removal: .opacity
-                                            ))
+                                    ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
+                                        MessageWithTimestampView(
+                                            message: message,
+                                            previousMessage: index > 0 ? viewModel.messages[index - 1] : nil,
+                                            maxWidth: geometry.size.width * 0.75
+                                        )
+                                        .id(message.id)
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                            Button(role: .destructive, action: {
+                                                pendingDeleteMessage = message
+                                            }) {
+                                                Label("Delete", systemImage: "trash")
+                                            }
+                                        }
                                     }
                                     
                                     // Ray is thinking indicator with animated dots
                                     if viewModel.isProcessing {
-                                        RayThinkingIndicator()
+                                        TypingIndicatorBubble()
                                             .id("thinking")
-                                            .transition(.opacity)
+                                            .transition(.opacity.combined(with: .scale))
                                     }
                                 }
                                 .padding(.horizontal, 16)
@@ -199,9 +206,10 @@ struct ChatView: View {
 
 // MARK: - Message Bubble
 
-struct MessageBubble: View {
+private struct MessageBubble: View {
     let message: Message
     var maxWidth: CGFloat = 300
+    @State private var showCopiedToast = false
     
     var body: some View {
         HStack {
@@ -244,6 +252,80 @@ struct MessageBubble: View {
                 Spacer()
             }
         }
+        .contextMenu {
+            Button {
+                UIPasteboard.general.string = message.content
+                provideHapticFeedback()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showCopiedToast = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showCopiedToast = false
+                    }
+                }
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }
+        .overlay(alignment: message.isFromUser ? .topTrailing : .topLeading) {
+            if showCopiedToast {
+                Text("Copied!")
+                    .font(.caption2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.75))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                    .transition(.opacity.combined(with: .scale))
+                    .padding(message.isFromUser ? .trailing : .leading, 8)
+            }
+        }
+    }
+    
+    private func provideHapticFeedback() {
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+    }
+}
+
+// MARK: - Timestamp Wrapper
+
+/// Wraps a message bubble with an optional timestamp shown when enough time passed since previous message.
+private struct MessageWithTimestampView: View {
+    let message: Message
+    let previousMessage: Message?
+    let maxWidth: CGFloat
+    
+    var body: some View {
+        VStack(alignment: message.isFromUser ? .trailing : .leading, spacing: 4) {
+            MessageBubble(message: message, maxWidth: maxWidth)
+                .transition(.asymmetric(
+                    insertion: .move(edge: message.isFromUser ? .trailing : .leading)
+                        .combined(with: .opacity),
+                    removal: .opacity
+                ))
+            
+            if shouldShowTimestamp {
+                Text(message.timestamp, style: .relative)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(.gray)
+                    .opacity(0.7)
+                    .frame(maxWidth: maxWidth, alignment: message.isFromUser ? .trailing : .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: message.isFromUser ? .trailing : .leading)
+        .padding(.horizontal, 4)
+    }
+    
+    /// Only show timestamp when >5 minutes elapsed since previous message.
+    private var shouldShowTimestamp: Bool {
+        guard let previous = previousMessage else { return true }
+        let difference = message.timestamp.timeIntervalSince(previous.timestamp)
+        return difference >= 5 * 60
     }
 }
 
@@ -399,60 +481,106 @@ struct RayMessageActions: View {
     }
 }
 
-// MARK: - Ray Thinking Indicator
+// MARK: - Typing Indicator Bubble
 
-struct RayThinkingIndicator: View {
+/// Animated typing bubble that mimics modern chat apps while Ray is processing.
+struct TypingIndicatorBubble: View {
+    @State private var isAnimating = false
+    
+    private let bubbleBackground = Color.gray.opacity(0.2)
+    private let dotColor = Color.gray.opacity(0.6)
+    private let dotSize: CGFloat = 8
+    private let animationDuration = 0.6
+    
     var body: some View {
-        HStack(spacing: 4) {
-            Text("Ray is thinking")
-                .font(.system(size: 14, weight: .regular))
-                .foregroundColor(.gray)
-            
-            HStack(spacing: 4) {
-                ThinkingDot(animationDelay: 0.0)
-                ThinkingDot(animationDelay: 0.2)
-                ThinkingDot(animationDelay: 0.4)
+        HStack(alignment: .bottom) {
+            // Align to left like Ray's messages
+            VStack(alignment: .leading) {
+                HStack(spacing: 6) {
+                    ForEach(0..<3) { index in
+                        TypingDot(
+                            delay: Double(index) * (animationDuration / 3),
+                            isAnimating: $isAnimating,
+                            size: dotSize,
+                            color: dotColor,
+                            duration: animationDuration
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(
+                    // Ray-style light bubble with rounded corners
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(bubbleBackground)
+                        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
+                )
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.8, alignment: .leading)
             }
             
             Spacer()
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-}
-
-struct ThinkingDot: View {
-    let animationDelay: Double
-    @State private var opacity: Double = 0.3
-    
-    var body: some View {
-        Circle()
-            .fill(Color.gray)
-            .frame(width: 6, height: 6)
-            .opacity(opacity)
-            .onAppear {
-                startPulsingAnimation()
-            }
-    }
-    
-    private func startPulsingAnimation() {
-        Task {
-            try? await Task.sleep(nanoseconds: UInt64(animationDelay * 1_000_000_000))
-            
-            while true {
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    opacity = 1.0
-                }
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    opacity = 0.3
-                }
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-            }
+        .padding(.top, 8)
+        .onAppear {
+            isAnimating = true
+        }
+        .onDisappear {
+            isAnimating = false
         }
     }
 }
+
+/// Single animated dot used in the typing indicator.
+private struct TypingDot: View {
+    let delay: Double
+    @Binding var isAnimating: Bool
+    let size: CGFloat
+    let color: Color
+    let duration: Double
+
+    @State private var scale: CGFloat = 0.8
+    @State private var opacity: Double = 0.6
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .scaleEffect(scale)
+            .opacity(opacity)
+            .onChange(of: isAnimating) { _, animating in
+                if animating {
+                    startAnimating()
+                } else {
+                    stopAnimating()
+                }
+            }
+            .onAppear {
+                if isAnimating {
+                    startAnimating()
+                }
+            }
+    }
+
+    private func startAnimating() {
+        withAnimation(
+            Animation.easeInOut(duration: duration)
+                .repeatForever()
+                .delay(delay)
+        ) {
+            scale = 1.0
+            opacity = 1.0
+        }
+    }
+
+    private func stopAnimating() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            scale = 0.8
+            opacity = 0.6
+        }
+    }
+}
+
 
 #Preview {
     ChatView()

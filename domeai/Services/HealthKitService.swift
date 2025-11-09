@@ -41,7 +41,7 @@ class HealthKitService {
     
     func getHeartRateData() async -> [Double] {
         // TODO: Fetch heart rate samples
-        guard let heartRateType = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
+        guard HKQuantityType.quantityType(forIdentifier: .heartRate) != nil else {
             return []
         }
         

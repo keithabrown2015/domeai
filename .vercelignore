@@ -1,0 +1,19 @@
+# iOS/macOS
+domeai.xcodeproj/
+domeai.xcworkspace/
+domeai/
+*.xcuserstate
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+xcuserdata/
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Old/unused
+vercel/
+

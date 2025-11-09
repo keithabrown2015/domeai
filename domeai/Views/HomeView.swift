@@ -40,221 +40,26 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
-                ZStack {
-                    // Black background
-                    Color.black
-                        .ignoresSafeArea()
-                    
-                    VStack(spacing: 0) {
-                        // EMOJI NAV ROW (between header and chat) with drag & drop
-                        EmojiNavRow(
-                            selectedSection: $selectedSection,
-                            emojiOrder: $emojiOrder,
-                            draggedEmoji: $draggedEmoji
-                        )
-                        .environmentObject(chatViewModel)
-                        .padding(.top, 12)
-                        .padding(.bottom, 12)
-                        .padding(.horizontal, 16)
-                        
-                        // CHAT AREA (stored proxy and bottom arrow)
-                        ZStack(alignment: .bottomTrailing) {
-                            ScrollViewReader { proxy in
-                                ScrollView {
-                                LazyVStack(spacing: 12) {
-                                    ForEach(chatViewModel.messages) { message in
-                                        VStack(spacing: 4) {
-                                            MessageBubble(message: message, maxWidth: geometry.size.width * 0.75)
-                                                    .id(message.id)
-                                            
-                                            // Action buttons
-                                            MessageActionButtons(message: message, viewModel: chatViewModel)
-                                        }
-                                    }
-                                    
-                                        // Ray is thinking indicator
-                                    if chatViewModel.isProcessing {
-                                        RayThinkingIndicator()
-                                                .id("thinking")
-                                    }
-                                    
-                                        // Bottom marker
-                                    Color.clear
-                                        .frame(height: 1)
-                                            .id("bottom")
-                                }
-                                    .padding()
-                                    .background(
-                                        GeometryReader { geo in
-                                            Color.clear.preference(
-                                                key: ViewOffsetKey.self,
-                                                value: geo.frame(in: .named("scroll")).minY
-                                            )
-                                        }
-                                    )
-                                }
-                                .coordinateSpace(name: "scroll")
-                                .onPreferenceChange(ViewOffsetKey.self) { offset in
-                                    withAnimation { showScrollButton = offset < -100 }
-                                }
-                                .onAppear {
-                                    scrollProxy = proxy
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                        proxy.scrollTo("bottom", anchor: .bottom)
-                                    }
-                                }
-                                .onChange(of: chatViewModel.messages.count) { _, _ in
-                                    withAnimation {
-                                        proxy.scrollTo("bottom", anchor: .bottom)
-                                    }
-                                    showScrollButton = false
-                                }
-                            }
-                            
-                            // ARROW BUTTON
-                            if showScrollButton {
-                                Button {
-                                    withAnimation(.spring()) {
-                                        scrollProxy?.scrollTo("bottom", anchor: .bottom)
-                                    }
-                                } label: {
-                                    ZStack {
-                                        Circle()
-                                            .fill(Color.blue)
-                                            .frame(width: 56, height: 56)
-                                            .shadow(color: .black.opacity(0.3), radius: 8)
-                                        Image(systemName: "arrow.down.circle.fill")
-                                            .font(.system(size: 40))
-                                            .foregroundColor(.white)
-                                    }
-                                }
-                                .padding(.trailing, 20)
-                                .padding(.bottom, 140)
-                                .transition(.scale.combined(with: .opacity))
-                            }
-                        }
-                        
-                        // PINNED ATTACHMENTS ROW (just above dock)
-                        if chatViewModel.currentAttachment != nil {
-                            AttachmentRowView()
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 8)
-                        }
-                        
-                        // BOTTOM DOCK (fixed above safe area)
-                        HStack(spacing: 12) {
-                            // Left: Paperclip button
-                            Button {
-                                showingAttachmentSheet = true
-                            } label: {
-                                Text("📎")
-                                    .font(.system(size: 24))
-                                    .frame(width: 44, height: 44)
-                            }
-                            
-                            // Center: Pill-shaped text input
-                            TextField("Message Ray...", text: $messageText)
-                                .textFieldStyle(.plain)  // Use plain style
-                                .font(.system(size: 16))
-                                .foregroundColor(.white)
-                                .padding(12)
-                                .background(
-                                    Capsule()
-                                        .fill(Color(red: 0.17, green: 0.17, blue: 0.18)) // #2C2C2E
-                                )
-                                .focused($isTextFieldFocused)
-                                .autocorrectionDisabled(true)
-                                .textInputAutocapitalization(.sentences)
-                                .keyboardType(.default)
-                                .submitLabel(.send)  // Changes "return" to "send"
-                                .disabled(chatViewModel.isProcessing)  // Disable during processing
-                                .onSubmit {
-                                    sendMessage()
-                                }
-                                .animation(.easeInOut(duration: 0.2), value: isTextFieldFocused)
-                                .ignoresSafeArea(.keyboard, edges: .bottom)
-                            
-                            // Right: Large mic button
-                            Button {
-                                toggleRecording()
-                            } label: {
-                                ZStack {
-                                    // Pulsing glow when recording
-                                    if chatViewModel.isRecording {
-                                        Circle()
-                                            .stroke(Color.red.opacity(0.6), lineWidth: 3)
-                                            .frame(width: 60, height: 60)
-                                            .scaleEffect(pulseScale)
-                                            .opacity(pulseScale > 1.0 ? 0.3 : 0.6)
-                                    }
-                                    
-                                    // Mic button
-                                    Text("🎙️")
-                                        .font(.system(size: 32))
-                                        .frame(width: 60, height: 60)
-                                        .background(
-                                            Circle()
-                                                .fill(chatViewModel.isRecording ? Color.red.opacity(0.3) : Color.clear)
-                                        )
-                                }
-                            }
-                            .disabled(chatViewModel.isProcessing)
-                            .opacity(chatViewModel.isProcessing ? 0.5 : 1.0)
-                            .onAppear {
-                                updatePulseAnimation()
-                            }
-                            .onChange(of: chatViewModel.isRecording) { _, _ in
-                                updatePulseAnimation()
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(Color.black)
-                    }
-                    
-                    // TTS Controls overlay (when Ray is actively speaking or paused)
-                    if ttsService.isSpeaking || ttsService.isPaused {
-                        VStack {
-                            HStack(spacing: 20) {
-                                Text("Ray is speaking...")
-                                    .foregroundColor(.white)
-                                    .font(.callout)
-                                
-                                Button {
-                                    if ttsService.isPaused {
-                                        ttsService.resume()
-                                    } else {
-                                        ttsService.pause()
-                                    }
-                                } label: {
-                                    Image(systemName: ttsService.isPaused ? "play.circle.fill" : "pause.circle.fill")
-                                        .font(.system(size: 32))
-                                        .foregroundColor(.white)
-                                }
-                                
-                                Button {
-                                    ttsService.stop()
-                                } label: {
-                                    Image(systemName: "stop.circle.fill")
-                                        .font(.system(size: 32))
-                                        .foregroundColor(.red)
-                                }
-                            }
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 25)
-                                    .fill(Color.black.opacity(0.85))
+                Color.black
+                    .ignoresSafeArea()
+                    .overlay(
+                        VStack(spacing: 0) {
+                            EmojiNavRow(
+                                selectedSection: $selectedSection,
+                                emojiOrder: $emojiOrder,
+                                draggedEmoji: $draggedEmoji
                             )
-                            .shadow(radius: 10)
+                            .environmentObject(chatViewModel)
+                            .padding(.top, 12)
+                            .padding(.bottom, 12)
+                            .padding(.horizontal, 16)
                             
-                            Spacer()
+                            chatMessagesSection(geometry)
+                            attachmentSection
+                            bottomInputBar
                         }
-                        .padding(.top, 100)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .animation(.spring(), value: ttsService.isSpeaking || ttsService.isPaused)
-                    }
-                }
+                    )
+                    .overlay(ttsOverlay, alignment: .top)
             }
             .navigationBarTitleDisplayMode(.inline)
             .preferredColorScheme(.dark)
@@ -439,6 +244,237 @@ struct HomeView: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                 pulseScale = 1.0
             }
+        }
+    }
+    
+    @ViewBuilder
+    private func chatMessagesSection(_ geometry: GeometryProxy) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(chatViewModel.messages) { message in
+                            messageRow(for: message, geometry: geometry)
+                                .id(message.id)
+                        }
+                        
+                        if chatViewModel.isProcessing {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .blue))
+                                .padding(.top, 12)
+                                .id("thinking")
+                        }
+                        
+                        Color.clear
+                            .frame(height: 1)
+                            .id("bottom")
+                    }
+                    .padding()
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: ViewOffsetKey.self,
+                                value: geo.frame(in: .named("scroll")).minY
+                            )
+                        }
+                    )
+                }
+                .coordinateSpace(name: "scroll")
+                .onPreferenceChange(ViewOffsetKey.self) { offset in
+                    withAnimation {
+                        showScrollButton = offset < -100
+                    }
+                }
+                .onAppear {
+                    scrollProxy = proxy
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+                .onChange(of: chatViewModel.messages.count) { _, _ in
+                    withAnimation {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    showScrollButton = false
+                }
+            }
+            
+            if showScrollButton {
+                Button {
+                    withAnimation(.spring()) {
+                        scrollProxy?.scrollTo("bottom", anchor: .bottom)
+                    }
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(Color.blue)
+                            .frame(width: 56, height: 56)
+                            .shadow(color: .black.opacity(0.3), radius: 8)
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.white)
+                    }
+                }
+                .padding(.trailing, 20)
+                .padding(.bottom, 140)
+                .transition(.scale.combined(with: .opacity))
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func messageRow(for message: Message, geometry: GeometryProxy) -> some View {
+        VStack(alignment: message.isFromUser ? .trailing : .leading, spacing: 6) {
+            HStack(alignment: .bottom) {
+                if message.isFromUser { Spacer(minLength: 0) }
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    if let imageData = message.attachmentData,
+                       message.attachmentType == "image",
+                       let uiImage = UIImage(data: imageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: geometry.size.width * 0.65, maxHeight: 240)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    
+                    if !message.content.isEmpty {
+                        Text(message.content)
+                            .font(.system(size: 16, weight: .regular))
+                            .foregroundColor(message.isFromUser ? .white : .primary)
+                    }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(message.isFromUser ? Color.blue.opacity(0.85) : Color.gray.opacity(0.2))
+                )
+                .frame(maxWidth: geometry.size.width * 0.75, alignment: message.isFromUser ? .trailing : .leading)
+                
+                if !message.isFromUser { Spacer(minLength: 0) }
+            }
+            
+            MessageActionButtons(message: message, viewModel: chatViewModel)
+        }
+    }
+    
+    @ViewBuilder
+    private var attachmentSection: some View {
+        if chatViewModel.currentAttachment != nil {
+            AttachmentRowView()
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+        }
+    }
+    
+    @ViewBuilder
+    private var bottomInputBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                showingAttachmentSheet = true
+            } label: {
+                Text("📎")
+                    .font(.system(size: 24))
+                    .frame(width: 44, height: 44)
+            }
+            
+            TextField("Message Ray...", text: $messageText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 16))
+                .foregroundColor(.white)
+                .padding(12)
+                .background(
+                    Capsule()
+                        .fill(Color(red: 0.17, green: 0.17, blue: 0.18))
+                )
+                .focused($isTextFieldFocused)
+                .autocorrectionDisabled(true)
+                .textInputAutocapitalization(.sentences)
+                .keyboardType(.default)
+                .submitLabel(.send)
+                .disabled(chatViewModel.isProcessing)
+                .onSubmit { sendMessage() }
+                .animation(.easeInOut(duration: 0.2), value: isTextFieldFocused)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+            
+            Button {
+                toggleRecording()
+            } label: {
+                ZStack {
+                    if chatViewModel.isRecording {
+                        Circle()
+                            .stroke(Color.red.opacity(0.6), lineWidth: 3)
+                            .frame(width: 60, height: 60)
+                            .scaleEffect(pulseScale)
+                            .opacity(pulseScale > 1.0 ? 0.3 : 0.6)
+                    }
+                    
+                    Text("🎙️")
+                        .font(.system(size: 32))
+                        .frame(width: 60, height: 60)
+                        .background(
+                            Circle()
+                                .fill(chatViewModel.isRecording ? Color.red.opacity(0.3) : Color.clear)
+                        )
+                }
+            }
+            .disabled(chatViewModel.isProcessing)
+            .opacity(chatViewModel.isProcessing ? 0.5 : 1.0)
+            .onAppear {
+                updatePulseAnimation()
+            }
+            .onChange(of: chatViewModel.isRecording) { _, _ in
+                updatePulseAnimation()
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.black)
+    }
+    
+    @ViewBuilder
+    private var ttsOverlay: some View {
+        if ttsService.isSpeaking || ttsService.isPaused {
+            VStack {
+                HStack(spacing: 20) {
+                    Text("Ray is speaking...")
+                        .foregroundColor(.white)
+                        .font(.callout)
+                    
+                    Button {
+                        if ttsService.isPaused {
+                            ttsService.resume()
+                        } else {
+                            ttsService.pause()
+                        }
+                    } label: {
+                        Image(systemName: ttsService.isPaused ? "play.circle.fill" : "pause.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.white)
+                    }
+                    
+                    Button {
+                        ttsService.stop()
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.red)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 25)
+                        .fill(Color.black.opacity(0.85))
+                )
+                .shadow(radius: 10)
+                
+                Spacer()
+            }
+            .padding(.top, 100)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .animation(.spring(), value: ttsService.isSpeaking || ttsService.isPaused)
         }
     }
     

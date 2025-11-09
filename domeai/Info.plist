@@ -4,5 +4,15 @@
 <dict>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Dome-AI uses notifications to send you helpful nudges and reminders from Ray.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>DomeAI uses speech recognition so you can talk to Ray hands-free.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>DomeAI needs microphone access to enable voice conversations with Ray.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>DomeAI uses your camera so Ray can help analyze photos and images.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>DomeAI needs access to your photos so Ray can analyze and help with your images.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>DomeAI needs permission to save photos to your library.</string>
 </dict>
 </plist>

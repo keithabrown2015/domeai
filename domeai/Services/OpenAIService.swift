@@ -16,7 +16,7 @@ class OpenAIService {
     
     private init() {}
     
-    func sendChatMessage(messages: [Message], systemPrompt: String, model: String = Config.defaultModel) async throws -> String {
+    func sendChatMessage(messages: [Message], systemPrompt: String, model: String = "gpt-4o-mini") async throws -> String {
         print("🤖 OpenAI: Processing \(messages.count) messages via Vercel relay")
         print("🤖 Using model: \(model)")
         

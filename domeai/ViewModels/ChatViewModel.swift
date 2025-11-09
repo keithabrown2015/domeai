@@ -24,6 +24,7 @@ class ChatViewModel: ObservableObject {
     @Published var recognizedText: String = ""
     @Published var showingSourcesSheet = false
     @Published var selectedMessageSources: [MessageSource] = []
+    @Published var isRefreshing: Bool = false
     
     // MARK: - Services
     
@@ -246,32 +247,31 @@ class ChatViewModel: ObservableObject {
             return
         }
         
-        do {
-            let lowercasedContent = content.lowercased()
-            var rayResponse: String = ""
+        let lowercasedContent = content.lowercased()
+        var rayResponse: String = ""
+        
+        // Check for memory save requests
+        if lowercasedContent.contains("remember") || lowercasedContent.contains("save") {
+            print("🟡 MEMORY INTENT detected")
+            rayResponse = await handleMemoryIntent(content: content)
             
-            // Check for memory save requests
-            if lowercasedContent.contains("remember") || lowercasedContent.contains("save") {
-                print("🟡 MEMORY INTENT detected")
-                rayResponse = await handleMemoryIntent(content: content)
+        } else {
+            // Everything else goes to OpenAI - general conversation
+            print("🟣 GENERAL CONVERSATION - calling OpenAI")
+            
+            do {
+                print("🟣 About to call OpenAI...")
                 
-            } else {
-                // Everything else goes to OpenAI - general conversation
-                print("🟣 GENERAL CONVERSATION - calling OpenAI")
+                // Build system prompt with current date
+                let currentDate = Date()
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateStyle = .long
+                let dateString = dateFormatter.string(from: currentDate)
                 
-                do {
-                    print("🟣 About to call OpenAI...")
-                    
-                    // Build system prompt with current date
-                    let currentDate = Date()
-                    let dateFormatter = DateFormatter()
-                    dateFormatter.dateStyle = .long
-                    let dateString = dateFormatter.string(from: currentDate)
-                    
-                    // For regular conversation, pass ENTIRE message history to OpenAI
-                    print("💬 Sending conversation with \(messages.count) messages to OpenAI")
-                    
-                    let systemPrompt = """
+                // For regular conversation, pass ENTIRE message history to OpenAI
+                print("💬 Sending conversation with \(messages.count) messages to OpenAI")
+                
+                let systemPrompt = """
                     You are Ray, a powerful AI assistant with these capabilities:
                     
                     CORE ABILITIES:
@@ -305,43 +305,43 @@ class ChatViewModel: ObservableObject {
                     Today is \(dateString).
                     """
                     
-                    // Detect current info requests and enhance with Google Search
-                    print("🔵 processUserMessage START: '\(content)'")
-                    
-                    // Check each keyword individually
-                    let currentInfoKeywords = ["top", "current", "latest", "rankings", "news", "today", "now"]
-                    
-                    print("🔵 Checking for search keywords...")
-                    for keyword in currentInfoKeywords {
-                        if content.lowercased().contains(keyword) {
-                            print("✅ FOUND KEYWORD: '\(keyword)' - should trigger search!")
-                        }
+                // Detect current info requests and enhance with Google Search
+                print("🔵 processUserMessage START: '\(content)'")
+                
+                // Check each keyword individually
+                let currentInfoKeywords = ["top", "current", "latest", "rankings", "news", "today", "now"]
+                
+                print("🔵 Checking for search keywords...")
+                for keyword in currentInfoKeywords {
+                    if content.lowercased().contains(keyword) {
+                        print("✅ FOUND KEYWORD: '\(keyword)' - should trigger search!")
                     }
+                }
+                
+                let needsSearch = currentInfoKeywords.contains(where: { content.lowercased().contains($0) })
+                print("🔵 needsSearch = \(needsSearch)")
+                
+                if needsSearch {
+                    print("🔍🔍🔍 TRIGGERING GOOGLE SEARCH 🔍🔍🔍")
                     
-                    let needsSearch = currentInfoKeywords.contains(where: { content.lowercased().contains($0) })
-                    print("🔵 needsSearch = \(needsSearch)")
-                    
-                    if needsSearch {
-                        print("🔍🔍🔍 TRIGGERING GOOGLE SEARCH 🔍🔍🔍")
+                    do {
+                        let searchResults = try await GoogleSearchService.shared.search(query: content)
                         
-                        do {
-                            let searchResults = try await GoogleSearchService.shared.search(query: content)
-                            
-                            guard !searchResults.isEmpty else {
-                                print("🔍 No search results found")
-                                // Fall back to OpenAI
-                                throw NSError(domain: "Search", code: 404, userInfo: nil)
-                            }
-                            
-                            print("🔍 Found \(searchResults.count) results")
-                            
-                            // Format search results for Ray
-                            let resultsContext = searchResults.prefix(5).enumerated().map { index, result in
-                                "\(index + 1). \(result.title)\n   \(result.snippet)\n   Source: \(result.link)"
-                            }.joined(separator: "\n\n")
-                            
-                            // Create enhanced prompt with search results
-                            let searchPrompt = """
+                        guard !searchResults.isEmpty else {
+                            print("🔍 No search results found")
+                            // Fall back to OpenAI
+                            throw NSError(domain: "Search", code: 404, userInfo: nil)
+                        }
+                        
+                        print("🔍 Found \(searchResults.count) results")
+                        
+                        // Format search results for Ray
+                        let resultsContext = searchResults.prefix(5).enumerated().map { index, result in
+                            "\(index + 1). \(result.title)\n   \(result.snippet)\n   Source: \(result.link)"
+                        }.joined(separator: "\n\n")
+                        
+                        // Create enhanced prompt with search results
+                        let searchPrompt = """
                             You are Ray, a persistent and thorough AI assistant. Today is \(dateString).
                             
                             The user asked: "\(content)"
@@ -361,95 +361,83 @@ class ChatViewModel: ObservableObject {
                             Give the user the ACTUAL answer they're looking for, not a referral to another source.
                             """
                             
-                            // Pass full conversation history even with search results
-                            let rayResponse = try await OpenAIService.shared.sendChatMessage(
-                                messages: messages,  // ← FULL conversation history
-                                systemPrompt: searchPrompt,
-                                model: Config.defaultModel
-                            )
-                            
-                            print("🔍 Ray response with search context: \(rayResponse)")
-                            
-                            await MainActor.run {
-                                let rayMessage = Message(content: rayResponse, isFromUser: false)
-                                messages.append(rayMessage)
-                                storageService.saveMessages(messages)
-                                isProcessing = false
-                            }
-                            
-                            // No auto-play
-                            return
-                            
-                        } catch {
-                            print("🔴 Google search failed: \(error)")
-                            print("🔴 Falling back to OpenAI without search")
-                            // Continue to normal OpenAI call below
+                        // Pass full conversation history even with search results
+                        let rayResponse = try await OpenAIService.shared.sendChatMessage(
+                            messages: messages,  // ← FULL conversation history
+                            systemPrompt: searchPrompt,
+                            model: Config.defaultModel
+                        )
+                        
+                        print("🔍 Ray response with search context: \(rayResponse)")
+                        
+                        await MainActor.run {
+                            let rayMessage = Message(content: rayResponse, isFromUser: false)
+                            messages.append(rayMessage)
+                            storageService.saveMessages(messages)
+                            isProcessing = false
                         }
-                    } else {
-                        print("⚠️ No search triggered - going to OpenAI")
-                    }
-                    
-                    let selectedModel = selectModel(for: content)
-                    print("🤖 Selected model: \(selectedModel)")
-                    
-                    // CRITICAL: Pass the FULL messages array, not just the last message
-                    // This gives Ray the entire conversation context
-                    rayResponse = try await OpenAIService.shared.sendChatMessage(
-                        messages: messages,  // ← FULL conversation history
-                        systemPrompt: systemPrompt,
-                        model: selectedModel
-                    )
-                    
-                    print("💬 Ray's response: \(rayResponse)")
-                    
-                    await MainActor.run {
-                        let rayMessage = Message(content: rayResponse, isFromUser: false)
-                        messages.append(rayMessage)
-                        storageService.saveMessages(messages)
-                        isProcessing = false
-                        print("🟣 Ray message added successfully")
-                    }
-                    
-                    // No auto-play
-                    
-                } catch {
-                    print("🔴 OpenAI ERROR: \(error)")
-                    print("🔴 Error type: \(type(of: error))")
-                    print("🔴 Localized: \(error.localizedDescription)")
-                    
-                    await MainActor.run {
-                        // Add a visible error message so user knows what happened
-                        let errorMsg = Message(content: "I'm having trouble connecting to my brain right now. Error: \(error.localizedDescription)", isFromUser: false)
-                        messages.append(errorMsg)
-                        isProcessing = false
+                        
+                        // No auto-play
+                        return
+                        
+                    } catch {
+                        print("🔴 Google search failed: \(error)")
+                        print("🔴 Falling back to OpenAI without search")
+                        // Continue to normal OpenAI call below
                     }
                 }
                 
-                // Return early after OpenAI call (success or error)
-                return
+                let selectedModel = selectModel(for: content)
+                print("🤖 Selected model: \(selectedModel)")
+                
+                // CRITICAL: Pass the FULL messages array, not just the last message
+                // This gives Ray the entire conversation context
+                rayResponse = try await OpenAIService.shared.sendChatMessage(
+                    messages: messages,  // ← FULL conversation history
+                    systemPrompt: systemPrompt,
+                    model: selectedModel
+                )
+                
+                print("💬 Ray's response: \(rayResponse)")
+                
+                await MainActor.run {
+                    let rayMessage = Message(content: rayResponse, isFromUser: false)
+                    messages.append(rayMessage)
+                    storageService.saveMessages(messages)
+                    isProcessing = false
+                    print("🟣 Ray message added successfully")
+                }
+                
+                // No auto-play
+                
+            } catch {
+                print("🔴 OpenAI ERROR: \(error)")
+                print("🔴 Error type: \(type(of: error))")
+                print("🔴 Localized: \(error.localizedDescription)")
+                
+                await MainActor.run {
+                    // Add a visible error message so user knows what happened
+                    let errorMsg = Message(content: "I'm having trouble connecting to my brain right now. Error: \(error.localizedDescription)", isFromUser: false)
+                    messages.append(errorMsg)
+                    isProcessing = false
+                }
             }
             
-            print("🔵 Final rayResponse: '\(rayResponse)'")
-            
-            // Add Ray's response to messages - on MainActor (for memory/recall intents)
-            await MainActor.run {
-                let rayMessage = Message(content: rayResponse, isFromUser: false)
-                messages.append(rayMessage)
-                storageService.saveMessages(messages)
-                print("🟣 Ray message added. Total messages: \(messages.count)")
-            }
-            
-            // No auto-play
-            
-        } catch {
-            // Catch any other errors (from memory/recall handlers)
-            print("🔴 ERROR: Error processing message: \(error.localizedDescription)")
-            print("🔴 ERROR: Full error: \(error)")
-            
-            await MainActor.run {
-                isProcessing = false
-            }
+            // Return early after OpenAI call (success or error)
+            return
         }
+        
+        print("🔵 Final rayResponse: '\(rayResponse)'")
+        
+        // Add Ray's response to messages - on MainActor (for memory/recall intents)
+        await MainActor.run {
+            let rayMessage = Message(content: rayResponse, isFromUser: false)
+            messages.append(rayMessage)
+            storageService.saveMessages(messages)
+            print("🟣 Ray message added. Total messages: \(messages.count)")
+        }
+        
+        // No auto-play
     }
     
     // MARK: - Model Selection
@@ -1118,27 +1106,28 @@ class ChatViewModel: ObservableObject {
     func startVoiceInput() {
         Task {
             await speechService.startRecording()
-            // Update isRecording state from speechService
-            isRecording = speechService.isRecording
+            await MainActor.run {
+                isRecording = speechService.isRecording
+            }
         }
     }
     
     func stopVoiceInput() {
         Task {
-            speechService.stopRecording()
-            
-            // Get recognized text before stopping
-            let text = speechService.recognizedText
-            
-            // Update isRecording state
-            isRecording = false
-            recognizedText = ""
-            
-            // Send message if we have recognized text
-            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                sendMessage(content: text)
-                // Clear recognized text
+            let recognizedTextValue = await MainActor.run { () -> String in
+                speechService.stopRecording()
+                let text = speechService.recognizedText
                 speechService.recognizedText = ""
+                isRecording = false
+                recognizedText = ""
+                return text
+            }
+            
+            let trimmed = recognizedTextValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                await MainActor.run {
+                    sendMessage(content: trimmed)
+                }
             }
         }
     }
@@ -1168,6 +1157,21 @@ class ChatViewModel: ObservableObject {
     func loadMessagesFromStorage() {
         messages = storageService.loadMessages()
     }
+
+    @MainActor
+    func refreshData() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        
+        let loadedMessages = storageService.loadMessages()
+        let loadedMemories = storageService.loadMemories()
+        
+        messages = loadedMessages
+        memories = loadedMemories
+        
+        try? await Task.sleep(nanoseconds: 500_000_000)
+    }
     
     func saveMessagesToStorage() {
         storageService.saveMessages(messages)
@@ -1183,6 +1187,22 @@ class ChatViewModel: ObservableObject {
     func removeAttachment() {
         currentAttachment = nil
         print("🗑️ Attachment removed")
+    }
+
+    func clearAllMessages() {
+        messages.removeAll()
+        storageService.saveMessages(messages)
+        print("🧹 Cleared all chat messages")
+    }
+
+    func deleteMessage(id: UUID) {
+        if let index = messages.firstIndex(where: { $0.id == id }) {
+            messages.remove(at: index)
+            storageService.saveMessages(messages)
+            print("🗑️ Deleted message with id: \(id)")
+        } else {
+            print("⚠️ Unable to find message with id: \(id) to delete")
+        }
     }
     
     // MARK: - Document Generation
