@@ -1,22 +1,10 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/**/*.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
-    }
-  ],
   "env": {
     "OPENAI_API_KEY": "@openai-api-key",
     "APP_TOKEN": "@app-token",
-    "GOOGLE_API_KEY": "@google-api-key",
-    "GOOGLE_SEARCH_ENGINE_ID": "@google-search-engine-id"
+    "GOOGLE_SEARCH_API_KEY": "@google-api-key",
+    "GOOGLE_SEARCH_CX": "@google-search-engine-id"
   }
 }
 
