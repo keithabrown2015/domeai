@@ -88,9 +88,10 @@ class GoogleSearchService {
         print("🔍 HTTP Status: \(httpResponse.statusCode)")
         
         if httpResponse.statusCode != 200 {
-            if let errorString = String(data: data, encoding: .utf8) {
-                print("🔴 Search Relay Error: \(errorString)")
-            }
+            let errorString = String(data: data, encoding: .utf8) ?? "No error details"
+            print("🔴 Search Relay Error - Status: \(httpResponse.statusCode)")
+            print("🔴 Error Response: \(errorString)")
+            print("🔴 Request URL: \(url.absoluteString)")
             throw GoogleSearchServiceError.httpError(httpResponse.statusCode)
         }
         

@@ -68,9 +68,10 @@ class OpenAIService {
         print("🤖 Status code: \(httpResponse.statusCode)")
         
         guard httpResponse.statusCode == 200 else {
-            if let errorString = String(data: data, encoding: .utf8) {
-                print("🔴 Vercel Relay Error Response: \(errorString)")
-            }
+            let errorString = String(data: data, encoding: .utf8) ?? "No error details"
+            print("🔴 Vercel Relay Error - Status: \(httpResponse.statusCode)")
+            print("🔴 Error Response: \(errorString)")
+            print("🔴 Request URL: \(vercelURL)")
             throw OpenAIServiceError.httpError(httpResponse.statusCode)
         }
         
@@ -117,11 +118,16 @@ class OpenAIService {
         
         let (data, response) = try await URLSession.shared.data(for: request)
         
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            if let errorString = String(data: data, encoding: .utf8) {
-                print("🔴 Vision Relay Error: \(errorString)")
-            }
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw OpenAIServiceError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorString = String(data: data, encoding: .utf8) ?? "No error details"
+            print("🔴 Vision Relay Error - Status: \(httpResponse.statusCode)")
+            print("🔴 Error Response: \(errorString)")
+            print("🔴 Request URL: \(visionURL)")
+            throw OpenAIServiceError.httpError(httpResponse.statusCode)
         }
         
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]

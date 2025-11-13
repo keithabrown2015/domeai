@@ -1,57 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
-const GOOGLE_CX = process.env.GOOGLE_CX;
-const APP_TOKEN = process.env.APP_TOKEN;
-
 export async function POST(request: NextRequest) {
-  console.log('🔍 /api/google-search called');
+  const appToken = request.headers.get('x-app-token');
 
-  if (!GOOGLE_API_KEY || !GOOGLE_CX) {
-    console.error('❌ Missing Google Search environment variables');
-    return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 });
-  }
-
-  const appToken = request.headers.get('X-App-Token');
-  if (!appToken || appToken !== APP_TOKEN) {
+  if (appToken !== process.env.APP_TOKEN) {
+    console.log('❌ Unauthorized request to /api/google-search');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
-    const { query, num } = await request.json();
-    console.log('🔍 Searching for:', query);
+    const body = await request.json();
+    const { query, num } = body;
 
-    if (!query || typeof query !== 'string') {
+    if (!query) {
       return NextResponse.json({ error: 'Query is required' }, { status: 400 });
     }
 
-    const searchURL = new URL('https://www.googleapis.com/customsearch/v1');
-    searchURL.searchParams.set('key', GOOGLE_API_KEY);
-    searchURL.searchParams.set('cx', GOOGLE_CX);
-    searchURL.searchParams.set('q', query);
-    searchURL.searchParams.set('num', String(num || 10));
+    const apiKey = process.env.GOOGLE_API_KEY;
+    const cx = process.env.GOOGLE_CX;
 
-    const googleResponse = await fetch(searchURL.toString());
-
-    if (!googleResponse.ok) {
-      const errorText = await googleResponse.text();
-      console.log('❌ Google Search API error:', errorText);
+    if (!apiKey || !cx) {
+      console.error('❌ Missing Google credentials');
       return NextResponse.json(
-        { error: 'Google Search API error', details: errorText },
-        { status: googleResponse.status }
+        { error: 'Server configuration error' },
+        { status: 500 }
       );
     }
 
-    const data = await googleResponse.json();
-    console.log('✅ Google search success');
+    const searchURL = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(query)}&num=${num || 10}`;
+
+    console.log('🔍 Google Search for:', query);
+    const response = await fetch(searchURL);
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('❌ Google API error:', response.status, error);
+      return NextResponse.json(
+        { error: 'Google Search API error', details: error },
+        { status: response.status }
+      );
+    }
+
+    const data = await response.json();
+    console.log('✅ Search success:', data.items?.length || 0, 'results');
     return NextResponse.json(data);
   } catch (error: any) {
-    console.error('❌ Search relay error:', error);
+    console.error('❌ Search relay error:', error.message);
     return NextResponse.json(
-      { error: 'Internal server error', message: error?.message ?? 'Unknown error' },
+      { error: 'Internal server error', message: error.message },
       { status: 500 }
     );
   }

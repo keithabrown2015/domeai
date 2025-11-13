@@ -1,26 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const APP_TOKEN = process.env.APP_TOKEN;
-
 export async function POST(request: NextRequest) {
-  console.log('👁️ /api/vision called');
+  const appToken = request.headers.get('x-app-token');
 
-  if (!OPENAI_API_KEY) {
-    console.error('❌ Missing OPENAI_API_KEY environment variable');
-    return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 });
-  }
-
-  const appToken = request.headers.get('X-App-Token');
-  if (!appToken || appToken !== APP_TOKEN) {
+  if (appToken !== process.env.APP_TOKEN) {
+    console.log('❌ Unauthorized request to /api/vision');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
-    const { base64Image, prompt, max_tokens } = await request.json();
+    const body = await request.json();
+    const { base64Image, prompt, max_tokens } = body;
+
+    console.log('👁️ Vision request');
 
     const visionRequest = {
       model: 'gpt-4o',
@@ -39,31 +33,31 @@ export async function POST(request: NextRequest) {
       max_tokens: max_tokens || 1000,
     };
 
-    const openAIResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify(visionRequest),
     });
 
-    if (!openAIResponse.ok) {
-      const errorText = await openAIResponse.text();
-      console.log('❌ Vision API error:', errorText);
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('❌ Vision API error:', response.status, error);
       return NextResponse.json(
-        { error: 'Vision API error', details: errorText },
-        { status: openAIResponse.status }
+        { error: 'Vision API error', details: error },
+        { status: response.status }
       );
     }
 
-    const data = await openAIResponse.json();
-    console.log('✅ Vision analysis complete');
+    const data = await response.json();
+    console.log('✅ Vision success');
     return NextResponse.json(data);
   } catch (error: any) {
-    console.error('❌ Vision error:', error);
+    console.error('❌ Vision relay error:', error.message);
     return NextResponse.json(
-      { error: 'Vision error', message: error?.message ?? 'Unknown error' },
+      { error: 'Internal server error', message: error.message },
       { status: 500 }
     );
   }

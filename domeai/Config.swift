@@ -7,7 +7,7 @@ import Foundation
 
 struct Config {
     // Vercel API Relay endpoint
-    static let vercelBaseURL = "https://domeai-relay.vercel.app"
+    static let vercelBaseURL = "https://domeai-smoky.vercel.app"
     
     // Model hierarchy - use cheapest first
     static let defaultModel = "gpt-4o-mini"  // Fast, cheap, good for most tasks
