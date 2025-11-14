@@ -14,6 +14,8 @@ class StorageService {
     private let memoriesFileName = "memories.json"
     private let messagesFileName = "chatHistory.json"
     private let nudgesFileName = "nudges.json"
+    private let eventsFileName = "domeEvents.json"
+    private let tasksFileName = "domeTasks.json"
     
     private var documentsDirectory: URL {
         fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -29,6 +31,14 @@ class StorageService {
     
     private var nudgesURL: URL {
         documentsDirectory.appendingPathComponent(nudgesFileName)
+    }
+    
+    private var eventsURL: URL {
+        documentsDirectory.appendingPathComponent(eventsFileName)
+    }
+    
+    private var tasksURL: URL {
+        documentsDirectory.appendingPathComponent(tasksFileName)
     }
     
     private init() {}
@@ -150,6 +160,75 @@ class StorageService {
             return nudges
         } catch {
             print("❌ Failed to load nudges: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    // DOME_STORAGE_EXPANSION
+    // MARK: - Dome Events
+    
+    func saveDomeEvents(_ events: [DomeEvent]) {
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(events)
+            try data.write(to: eventsURL)
+            print("✅ Successfully saved \(events.count) Dome events")
+        } catch {
+            print("❌ Failed to save Dome events: \(error.localizedDescription)")
+        }
+    }
+    
+    func loadDomeEvents() -> [DomeEvent] {
+        do {
+            guard fileManager.fileExists(atPath: eventsURL.path) else {
+                print("ℹ️ Dome events file does not exist, returning empty array")
+                return []
+            }
+            
+            let data = try Data(contentsOf: eventsURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let events = try decoder.decode([DomeEvent].self, from: data)
+            print("✅ Successfully loaded \(events.count) Dome events")
+            return events
+        } catch {
+            print("❌ Failed to load Dome events: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    // MARK: - Dome Tasks
+    
+    func saveDomeTasks(_ tasks: [DomeTask]) {
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(tasks)
+            try data.write(to: tasksURL)
+            print("✅ Successfully saved \(tasks.count) Dome tasks")
+        } catch {
+            print("❌ Failed to save Dome tasks: \(error.localizedDescription)")
+        }
+    }
+    
+    func loadDomeTasks() -> [DomeTask] {
+        do {
+            guard fileManager.fileExists(atPath: tasksURL.path) else {
+                print("ℹ️ Dome tasks file does not exist, returning empty array")
+                return []
+            }
+            
+            let data = try Data(contentsOf: tasksURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let tasks = try decoder.decode([DomeTask].self, from: data)
+            print("✅ Successfully loaded \(tasks.count) Dome tasks")
+            return tasks
+        } catch {
+            print("❌ Failed to load Dome tasks: \(error.localizedDescription)")
             return []
         }
     }

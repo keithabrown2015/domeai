@@ -148,6 +148,34 @@ class NotificationService: NSObject, ObservableObject {
         center.removePendingNotificationRequests(withIdentifiers: [identifier])
     }
     
+    // DOME_NOTIFICATION_HELPERS_START
+    func scheduleNotification(identifier: String, title: String, body: String, date: Date) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+        
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+        
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("❌ Failed to schedule notification: \(error.localizedDescription)")
+            } else {
+                print("✅ Scheduled notification: \(title) at \(date)")
+            }
+        }
+    }
+    
+    func cancelNotification(identifier: String) {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+        print("🗑️ Cancelled notification: \(identifier)")
+    }
+    // DOME_NOTIFICATION_HELPERS_END
+    
     // MARK: - Handle Actions
     
     func handleNudgeAction(action: NudgeAction, userInfo: [AnyHashable: Any]) {

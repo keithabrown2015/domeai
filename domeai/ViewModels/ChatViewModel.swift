@@ -33,6 +33,9 @@ class ChatViewModel: ObservableObject {
     private let ttsService = TextToSpeechService.shared
     private let attachmentService = AttachmentService.shared
     private let notificationService = NotificationService.shared
+    private let searchService = DomeSearchService.shared
+    private let calendarService = DomeCalendarService.shared
+    private let taskService = DomeTaskService.shared
     
     private var cancellables = Set<AnyCancellable>()
     
@@ -161,52 +164,156 @@ class ChatViewModel: ObservableObject {
                 return
             }
         }
-        // STEP 1: Memory recall FIRST
-        let recallKeywords = [
-            "what did i", "what was", "recall", "do you remember",
-            "what's my", "tell me about my", "what are my",
-            "how many", "show me", "find my"
-        ]
-        let isRecallRequest = recallKeywords.contains { content.lowercased().contains($0) }
-        if isRecallRequest {
-            print("🧠 Checking memories first...")
-            let query = content.lowercased()
-            let matchingMemories = memories.filter { memory in
-                let mem = memory.content.lowercased()
-                return mem.contains(query) ||
-                    query.contains(mem.split(separator: " ").first?.lowercased() ?? "")
+        // RAY_MEMORY_SAVE_DETECTION_START
+        // CRITICAL: Detect "remember" commands BEFORE doing anything else
+        let rememberKeywords = ["remember", "save this", "keep this", "don't forget", "store this", "note this"]
+        let isRememberRequest = rememberKeywords.contains { content.lowercased().contains($0) }
+        
+        if isRememberRequest {
+            print("💾 User wants Ray to remember something")
+            
+            var contentToSave = content
+            for keyword in rememberKeywords {
+                contentToSave = contentToSave.replacingOccurrences(of: keyword, with: "", options: .caseInsensitive)
             }
-            if !matchingMemories.isEmpty {
-                print("🧠 Found \(matchingMemories.count) matching memories!")
-                let memoriesContext = matchingMemories.map { "- \($0.content) (saved to \($0.category.displayName))" }.joined(separator: "\n")
-                let memoryPrompt = """
-                You are Ray. The user asked: "\(content)"
-                
-                Here's what I have saved in memory:
-                \(memoriesContext)
-                
-                Answer the user's question using ONLY the information from my memories above.
-                Be conversational and natural. Don't mention searching or sources - this is from your memory.
-                """
-                do {
-                    let response = try await OpenAIService.shared.sendChatMessage(
-                        messages: [Message(content: content, isFromUser: true)],
-                        systemPrompt: memoryPrompt,
-                        model: Config.defaultModel
-                    )
-                    await MainActor.run {
-                        messages.append(Message(content: response, isFromUser: false))
-                        StorageService.shared.saveMessages(messages)
-                        isProcessing = false
-                    }
-                    // No auto-play
-                    return
-                } catch {
-                    print("🔴 Error using memory: \(error)")
+            contentToSave = contentToSave.trimmingCharacters(in: .whitespacesAndNewlines)
+            if contentToSave.isEmpty {
+                contentToSave = extractMemoryContent(from: content)
+            }
+            if contentToSave.isEmpty {
+                contentToSave = content
+            }
+            
+            let autoTags = extractHashtags(from: content)
+            let category = inferCategory(from: contentToSave)
+            let memory = Memory(content: contentToSave, category: category, tags: autoTags)
+            memories.append(memory)
+            storageService.saveMemories(memories)
+            
+            print("✅ Ray saved to memory: \(contentToSave.prefix(50))... with tags: \(autoTags)")
+            
+            await MainActor.run {
+                let confirmationMessage = "Got it! I've saved that to my memory. 🧠"
+                messages.append(Message(content: confirmationMessage, isFromUser: false))
+                storageService.saveMessages(messages)
+                isProcessing = false
+            }
+            return
+        }
+        // RAY_MEMORY_SAVE_DETECTION_END
+        
+        // DOME_INTENT_DETECTION_START
+        let lowerContent = content.lowercased()
+        
+        if lowerContent.contains("calendar") || lowerContent.contains("upcoming events") {
+            let response = rayGetUpcomingEvents()
+            await MainActor.run {
+                messages.append(Message(content: response, isFromUser: false))
+                storageService.saveMessages(messages)
+                isProcessing = false
+            }
+            return
+        }
+        
+        if lowerContent.contains("tasks") || lowerContent.contains("to do") {
+            let response = rayGetActiveTasks()
+            await MainActor.run {
+                messages.append(Message(content: response, isFromUser: false))
+                storageService.saveMessages(messages)
+                isProcessing = false
+            }
+            return
+        }
+        // DOME_INTENT_DETECTION_END
+        
+        // RAY_MEMORY_RECALL_UPGRADE_START
+        print("🧠 Ray checking memory for: \(content)")
+        
+        let allMemories = memories
+        let query = content.lowercased()
+        var relevantMemories: [Memory] = []
+        
+        for memory in allMemories {
+            let memoryContent = memory.content.lowercased()
+            let queryWords = query.split(separator: " ").map { String($0) }
+            
+            for word in queryWords where word.count > 3 {
+                if memoryContent.contains(word) {
+                    relevantMemories.append(memory)
+                    break
                 }
             }
-            print("🧠 No memories found, will search...")
         }
+        
+        if query.contains("my name") || query.contains("who am i") || query.contains("what's my name") {
+            let nameMemories = allMemories.filter { memory in
+                let content = memory.content.lowercased()
+                return content.contains("name") || content.contains("call me") || content.contains("i am") || content.contains("i'm")
+            }
+            relevantMemories.append(contentsOf: nameMemories)
+        }
+        
+        if query.contains("what did") || query.contains("do you remember") || query.contains("did i tell you") {
+            relevantMemories.append(contentsOf: allMemories.suffix(10))
+        }
+        
+        var uniqueMemories: [UUID: Memory] = [:]
+        for memory in relevantMemories {
+            uniqueMemories[memory.id] = memory
+        }
+        relevantMemories = Array(uniqueMemories.values)
+        
+        if !relevantMemories.isEmpty {
+            print("🧠 Found \(relevantMemories.count) relevant memories!")
+            
+            let memoriesContext = relevantMemories.map { memory -> String in
+                var line = "- \(memory.content) (Category: \(memory.category.displayName)"
+                let tags = memory.tags.joined(separator: ", ")
+                if !tags.isEmpty {
+                    line += ", Tags: \(tags)"
+                }
+                line += ")"
+                return line
+            }.joined(separator: "\n")
+            
+            let memoryPrompt = """
+            You are Ray, the user's personal AI assistant in DomeAI.
+            
+            The user asked: "\(content)"
+            
+            Here is relevant information I have in my memory about the user:
+            \(memoriesContext)
+            
+            CRITICAL INSTRUCTIONS:
+            1. Answer the user's question ONLY using the information from my memory above
+            2. Be specific and direct - if they asked for their name, give their name
+            3. Do NOT say "I don't have access" or "I can't remember" - the information is RIGHT THERE in my memory
+            4. Be conversational and friendly, like a personal assistant who knows them well
+            5. If the memory contains the exact answer, give it immediately
+            
+            Answer naturally and personally, as if you remember them.
+            """
+            
+            do {
+                let response = try await OpenAIService.shared.sendChatMessage(
+                    messages: [Message(content: content, isFromUser: true)],
+                    systemPrompt: memoryPrompt,
+                    model: Config.defaultModel
+                )
+                
+                await MainActor.run {
+                    messages.append(Message(content: response, isFromUser: false))
+                    storageService.saveMessages(messages)
+                    isProcessing = false
+                }
+                return
+            } catch {
+                print("🔴 Error using memory to answer: \(error)")
+            }
+        } else {
+            print("🧠 No relevant memories found for this query")
+        }
+        // RAY_MEMORY_RECALL_UPGRADE_END
         
         // STEP 2: Check for document generation requests
         let docGenerationKeywords = ["create pdf", "generate pdf", "make pdf", "pdf",
@@ -251,197 +358,54 @@ class ChatViewModel: ObservableObject {
             return
         }
         
-        let lowercasedContent = content.lowercased()
-        var rayResponse: String = ""
+        // RAY_CONVERSATION_CONTEXT_START
+        let recentMessages = Array(messages.suffix(10))
         
-        // Check for memory save requests
-        if lowercasedContent.contains("remember") || lowercasedContent.contains("save") {
-            print("🟡 MEMORY INTENT detected")
-            rayResponse = await handleMemoryIntent(content: content)
+        let raySystemPrompt = """
+        You are Ray, a friendly, sharp, and helpful personal AI assistant living inside DomeAI.
+        
+        PERSONALITY:
+        - You are warm, conversational, and supportive
+        - You remember context within conversations
+        - You give clear, concise answers (2-4 sentences typically)
+        - You're proactive about helping the user stay organized
+        
+        CAPABILITIES YOU HAVE ACCESS TO:
+        - Memory system: User can ask you to remember things, and you save them
+        - Calendar: User can ask about upcoming events
+        - Tasks: User can ask about their to-do items
+        - You search your internal database before answering
+        
+        IMPORTANT:
+        - Maintain conversational context - remember what was said earlier in THIS conversation
+        - Be specific and direct with answers
+        - If you don't know something, be honest but helpful
+        
+        Answer naturally and conversationally.
+        """
+        
+        do {
+            let response = try await OpenAIService.shared.sendChatMessage(
+                messages: recentMessages.isEmpty ? messages : recentMessages,
+                systemPrompt: raySystemPrompt,
+                model: Config.defaultModel
+            )
             
-        } else {
-            // Everything else goes to OpenAI - general conversation
-            print("🟣 GENERAL CONVERSATION - calling OpenAI")
-            
-            do {
-                print("🟣 About to call OpenAI...")
-                
-                // Build system prompt with current date
-                let currentDate = Date()
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateStyle = .long
-                let dateString = dateFormatter.string(from: currentDate)
-                
-                // For regular conversation, pass ENTIRE message history to OpenAI
-                print("💬 Sending conversation with \(messages.count) messages to OpenAI")
-                
-                let systemPrompt = """
-                    You are Ray, a powerful AI assistant with these capabilities:
-                    
-                    CORE ABILITIES:
-                    - Answer questions using your broad general knowledge first
-                    - Use current web search only when the user explicitly asks for it or when the question clearly requires fresh, real-time, or location-specific data
-                    - Remember and recall information the user tells you
-                    - Generate professional documents (PDF, Word, Excel)
-                    - Analyze images and photos
-                    - Set reminders and notifications
-                    - Provide structured, organized responses
-                    
-                    DOCUMENT GENERATION:
-                    - When asked to create PDF/document/spreadsheet, generate files and format information professionally
-                    
-                    IMPORTANT PERSONALITY TRAITS:
-                    - You NEVER give up or tell users to check elsewhere
-                    - You extract and provide ALL relevant information from your own knowledge before considering tools
-                    - You are thorough and complete in your answers
-                    - You dig deeper when initial results are insufficient
-                    - You synthesize information from multiple sources
-                    - You provide specific details, names, numbers, and lists when asked
-                    
-                    SEARCH TOOL USAGE:
-                    - Reach for the web/search tool only for news, live scores, prices, weather, availability, schedules, or when the user explicitly asks for an online lookup
-                    - If a search returns nothing useful, continue with your best general-knowledge answer instead of apologizing about missing information
-                    
-                    You maintain conversation context - remember what the user has said previously in this conversation.
-                    If the user says "tell me more" or "what about that" or asks follow-up questions, refer back to the previous messages in the conversation.
-                    
-                    Keep responses organized, friendly, and helpful.
-                    Today is \(dateString).
-                    """
-                    
-                // Detect current info requests and enhance with Google Search
-                print("🔵 processUserMessage START: '\(content)'")
-                
-                // Check each keyword individually
-                let currentInfoKeywords = ["top", "current", "latest", "rankings", "news", "today", "now"]
-                
-                print("🔵 Checking for search keywords...")
-                for keyword in currentInfoKeywords {
-                    if content.lowercased().contains(keyword) {
-                        print("✅ FOUND KEYWORD: '\(keyword)' - should trigger search!")
-                    }
-                }
-                
-                let needsSearch = currentInfoKeywords.contains(where: { content.lowercased().contains($0) })
-                print("🔵 needsSearch = \(needsSearch)")
-                
-                if needsSearch {
-                    print("🔍🔍🔍 TRIGGERING GOOGLE SEARCH 🔍🔍🔍")
-                    
-                    do {
-                        let searchResults = try await GoogleSearchService.shared.search(query: content)
-                        
-                        guard !searchResults.isEmpty else {
-                            print("🔍 No search results found")
-                            // Fall back to OpenAI
-                            throw NSError(domain: "Search", code: 404, userInfo: nil)
-                        }
-                        
-                        print("🔍 Found \(searchResults.count) results")
-                        
-                        // Format search results for Ray
-                        let resultsContext = searchResults.prefix(5).enumerated().map { index, result in
-                            "\(index + 1). \(result.title)\n   \(result.snippet)\n   Source: \(result.link)"
-                        }.joined(separator: "\n\n")
-                        
-                        // Create enhanced prompt with search results
-                        let searchPrompt = """
-                            You are Ray, a persistent and thorough AI assistant. Today is \(dateString).
-                            
-                            The user asked: "\(content)"
-                            
-                            Here are current search results from the web:
-                            
-                            \(resultsContext)
-                            
-                            CRITICAL INSTRUCTIONS:
-                            - You MUST provide a complete, specific answer based on the search results
-                            - NEVER tell the user to "check a website" or "visit a source"
-                            - Extract ALL relevant information from the search results
-                            - If you see specific details like names, numbers, rankings, addresses, phone numbers - include them ALL
-                            - Synthesize information from multiple results to give the most complete answer
-                            - Be thorough and detailed - don't hold back information
-                            
-                            Give the user the ACTUAL answer they're looking for, not a referral to another source.
-                            """
-                            
-                        // Pass full conversation history even with search results
-                        let rayResponse = try await OpenAIService.shared.sendChatMessage(
-                            messages: messages,  // ← FULL conversation history
-                            systemPrompt: searchPrompt,
-                            model: Config.defaultModel
-                        )
-                        
-                        print("🔍 Ray response with search context: \(rayResponse)")
-                        
-                        await MainActor.run {
-                            let rayMessage = Message(content: rayResponse, isFromUser: false)
-                            messages.append(rayMessage)
-                            storageService.saveMessages(messages)
-                            isProcessing = false
-                        }
-                        
-                        // No auto-play
-                        return
-                        
-                    } catch {
-                        print("🔴 Google search failed: \(error)")
-                        print("🔴 Falling back to OpenAI without search")
-                        // Continue to normal OpenAI call below
-                    }
-                }
-                
-                let selectedModel = selectModel(for: content)
-                print("🤖 Selected model: \(selectedModel)")
-                
-                // CRITICAL: Pass the FULL messages array, not just the last message
-                // This gives Ray the entire conversation context
-                rayResponse = try await OpenAIService.shared.sendChatMessage(
-                    messages: messages,  // ← FULL conversation history
-                    systemPrompt: systemPrompt,
-                    model: selectedModel
-                )
-                
-                print("💬 Ray's response: \(rayResponse)")
-                
-                await MainActor.run {
-                    let rayMessage = Message(content: rayResponse, isFromUser: false)
-                    messages.append(rayMessage)
-                    storageService.saveMessages(messages)
-                    isProcessing = false
-                    print("🟣 Ray message added successfully")
-                }
-                
-                // No auto-play
-                
-            } catch {
-                print("🔴 OpenAI ERROR: \(error)")
-                print("🔴 Error type: \(type(of: error))")
-                print("🔴 Localized: \(error.localizedDescription)")
-                
-                await MainActor.run {
-                    // Add a visible error message so user knows what happened
-                    let errorMsg = Message(content: "I'm having trouble connecting to my brain right now. Error: \(error.localizedDescription)", isFromUser: false)
-                    messages.append(errorMsg)
-                    isProcessing = false
-                }
+            await MainActor.run {
+                messages.append(Message(content: response, isFromUser: false))
+                storageService.saveMessages(messages)
+                isProcessing = false
             }
-            
-            // Return early after OpenAI call (success or error)
-            return
+        } catch {
+            print("🔴 Error calling OpenAI: \(error)")
+            await MainActor.run {
+                messages.append(Message(content: "I'm having trouble processing that right now. Error: \(error.localizedDescription)", isFromUser: false))
+                storageService.saveMessages(messages)
+                isProcessing = false
+            }
         }
-        
-        print("🔵 Final rayResponse: '\(rayResponse)'")
-        
-        // Add Ray's response to messages - on MainActor (for memory/recall intents)
-        await MainActor.run {
-            let rayMessage = Message(content: rayResponse, isFromUser: false)
-            messages.append(rayMessage)
-            storageService.saveMessages(messages)
-            print("🟣 Ray message added. Total messages: \(messages.count)")
-        }
-        
-        // No auto-play
+        // RAY_CONVERSATION_CONTEXT_END
+        return
     }
     
     // MARK: - Model Selection
@@ -891,6 +855,118 @@ class ChatViewModel: ObservableObject {
     
     // MARK: - Helper Methods
     
+    // DOME_RAY_INTELLIGENCE_START
+    
+    private func rayRecall(query: String) -> String {
+        print("🧠 Ray recalling: \(query)")
+        let searchResults = searchService.searchAll(query: query)
+        guard !searchResults.isEmpty else {
+            return "I don't have any saved information about that yet. Would you like me to remember something?"
+        }
+        
+        var response = "Here's what I found in my memory:\n\n"
+        let limit = min(searchResults.count, 5)
+        for index in 0..<limit {
+            let result = searchResults[index]
+            response += "\(result.emoji) \(result.title)\n"
+            if let subtitle = result.subtitle, !subtitle.isEmpty {
+                response += "   \(subtitle)\n"
+            }
+            let tagsText = result.tags.joined(separator: ", ")
+            if !tagsText.isEmpty {
+                response += "   Tags: \(tagsText)\n"
+            }
+            if index < limit - 1 {
+                response += "\n"
+            }
+        }
+        if searchResults.count > limit {
+            response += "\n...and \(searchResults.count - limit) more results."
+        }
+        return response
+    }
+    
+    private func rayRemember(content: String, tags: [String], category: MemoryCategory) {
+        let memory = Memory(content: content, category: category, tags: tags)
+        memories.append(memory)
+        storageService.saveMemory(memory)
+        print("✅ Ray remembered: \(content.prefix(50))...")
+    }
+    
+    private func raySearchByTag(tag: String) -> [DomeSearchResult] {
+        print("🏷️ Ray searching tag: \(tag)")
+        return searchService.searchByTag(tag)
+    }
+    
+    private func rayGetUpcomingEvents() -> String {
+        let events = calendarService.getUpcomingEvents(limit: 5)
+        guard !events.isEmpty else {
+            return "You don't have any upcoming events scheduled."
+        }
+        
+        var response = "Here are your upcoming events:\n\n"
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .medium
+        dateFormatter.timeStyle = .short
+        
+        let count = min(events.count, 5)
+        for index in 0..<count {
+            let event = events[index]
+            response += "📅 \(event.title)\n"
+            response += "   \(dateFormatter.string(from: event.startDate))\n"
+            if let notes = event.notes, !notes.isEmpty {
+                response += "   \(notes)\n"
+            }
+            let tagsText = event.tags.joined(separator: ", ")
+            if !tagsText.isEmpty {
+                response += "   Tags: \(tagsText)\n"
+            }
+            if index < count - 1 {
+                response += "\n"
+            }
+        }
+        if events.count > count {
+            response += "\n...and \(events.count - count) more events."
+        }
+        return response
+    }
+    
+    private func rayGetActiveTasks() -> String {
+        let tasks = taskService.getActiveTasks()
+        guard !tasks.isEmpty else {
+            return "You're all caught up! No active tasks."
+        }
+        
+        var response = "Here are your active tasks:\n\n"
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .medium
+        
+        let count = min(tasks.count, 10)
+        for index in 0..<count {
+            let task = tasks[index]
+            response += "\(task.priority.emoji) \(task.title)\n"
+            if let dueDate = task.dueDate {
+                response += "   Due: \(dateFormatter.string(from: dueDate))\n"
+            }
+            if let notes = task.notes, !notes.isEmpty {
+                response += "   \(notes)\n"
+            }
+            let tagsText = task.tags.joined(separator: ", ")
+            if !tagsText.isEmpty {
+                response += "   Tags: \(tagsText)\n"
+            }
+            if index < count - 1 {
+                response += "\n"
+            }
+        }
+        if tasks.count > count {
+            response += "\n...and \(tasks.count - count) more tasks."
+        }
+        return response
+    }
+    
+    // DOME_RAY_INTELLIGENCE_END
+    
     private func extractMemoryContent(from content: String) -> String {
         // Try to extract content after keywords like "remember", "save", etc.
         let patterns = ["remember", "save", "store", "don't forget"]
@@ -911,6 +987,56 @@ class ChatViewModel: ObservableObject {
         // Default: return the content itself
         return content
     }
+    
+    private func extractTags(from content: String) -> [String] {
+        let pattern = try? NSRegularExpression(pattern: "#(\\w+)", options: .caseInsensitive)
+        let nsRange = NSRange(content.startIndex..<content.endIndex, in: content)
+        var tags: [String] = []
+        if let matches = pattern?.matches(in: content, options: [], range: nsRange) {
+            for match in matches {
+                if let range = Range(match.range(at: 1), in: content) {
+                    tags.append(String(content[range]).lowercased())
+                }
+            }
+        }
+        return Array(Set(tags))
+    }
+    
+    // RAY_MEMORY_HELPERS_START
+    private func extractHashtags(from text: String) -> [String] {
+        let pattern = "#\\w+"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        return matches.compactMap { match in
+            guard let range = Range(match.range, in: text) else { return nil }
+            return String(text[range]).replacingOccurrences(of: "#", with: "")
+        }
+    }
+    
+    private func inferCategory(from content: String) -> MemoryCategory {
+        let lowercased = content.lowercased()
+        
+        if lowercased.contains("doctor") || lowercased.contains("appointment") || lowercased.contains("medicine") {
+            return .doctor
+        } else if lowercased.contains("work") || lowercased.contains("meeting") || lowercased.contains("project") {
+            return .work
+        } else if lowercased.contains("recipe") || lowercased.contains("cook") || lowercased.contains("ingredients") {
+            return .recipes
+        } else if lowercased.contains("buy") || lowercased.contains("shopping") || lowercased.contains("purchase") {
+            return .shopping
+        } else if lowercased.contains("exercise") || lowercased.contains("workout") || lowercased.contains("fitness") {
+            return .exercise
+        } else if lowercased.contains("http") || lowercased.contains("www") || lowercased.contains(".com") {
+            return .links
+        } else if lowercased.contains("task") || lowercased.contains("todo") || lowercased.contains("need to") {
+            return .tasks
+        } else if lowercased.contains("note") {
+            return .notes
+        } else {
+            return categorizeMemory(content)
+        }
+    }
+    // RAY_MEMORY_HELPERS_END
     
     private func categorizeMemory(_ content: String) -> MemoryCategory {
         let lowercased = content.lowercased()
@@ -937,6 +1063,20 @@ class ChatViewModel: ObservableObject {
         // Default to brain
         return .brain
     }
+    
+    // RAY_MEMORY_DEBUG_START
+    func debugPrintMemories() {
+        print("=== RAY'S MEMORY DEBUG ===")
+        print("Total memories: \(memories.count)")
+        for (index, memory) in memories.enumerated() {
+            print("\(index + 1). [\(memory.category.displayName)] \(memory.content)")
+            if !memory.tags.isEmpty {
+                print("   Tags: \(memory.tags.joined(separator: ", "))")
+            }
+        }
+        print("========================")
+    }
+    // RAY_MEMORY_DEBUG_END
     
     private func extractSearchTerms(from content: String) -> [String] {
         // Extract key search terms by removing common question words

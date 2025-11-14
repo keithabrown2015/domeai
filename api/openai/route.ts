@@ -43,6 +43,7 @@ export async function POST(request: NextRequest) {
     }
 
     const data = await response.json();
+    console.log('RAW OPENAI RESPONSE:', JSON.stringify(data, null, 2));
     console.log('✅ OpenAI success');
     return NextResponse.json(data);
   } catch (error: any) {

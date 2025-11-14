@@ -75,7 +75,7 @@ class GoogleSearchService {
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        print("🔍 Request URL: \(url.absoluteString)")
+        print("DomeAI request URL: \(url.absoluteString)")
         
         // Make the request - SAME LOGIC AS BEFORE
         let (data, response) = try await URLSession.shared.data(for: request)
