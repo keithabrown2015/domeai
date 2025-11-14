@@ -261,7 +261,7 @@
           <div class="badge-row">
             <div class="badge">OpenAI key: env</div>
             <div class="badge">Google key: env</div>
-            <div class="badge">Relay: /api/google-search</div>
+            <div class="badge">Relay: /api/google-search/route</div>
           </div>
         </div>
       </div>
@@ -304,8 +304,8 @@
       appendLog('ui', 'Sending prompt to backend…');
 
       try {
-        // Call the existing google-search API route instead of the dummy /api/openai
-        const res = await fetch('/api/google-search', {
+        // Call the existing google-search route handler file
+        const res = await fetch('/api/google-search/route', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -328,7 +328,6 @@
           return;
         }
 
-        // Just dump the JSON for now so we can see what the API returns
         appendLog('ray', JSON.stringify(data));
       } catch (err) {
         appendLog('err', String(err), true);
