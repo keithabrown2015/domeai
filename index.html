@@ -261,7 +261,7 @@
           <div class="badge-row">
             <div class="badge">OpenAI key: env</div>
             <div class="badge">Google key: env</div>
-            <div class="badge">Relay: /api/…</div>
+            <div class="badge">Relay: /api/google-search</div>
           </div>
         </div>
       </div>
@@ -304,11 +304,16 @@
       appendLog('ui', 'Sending prompt to backend…');
 
       try {
-        // NOTE: we will update this URL later once the relay endpoint is confirmed.
-        const res = await fetch('/api/openai', {
+        // Call the existing google-search API route instead of the dummy /api/openai
+        const res = await fetch('/api/google-search', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text })
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            query: text,
+            num: 3
+          })
         });
 
         if (!res.ok) {
@@ -323,7 +328,8 @@
           return;
         }
 
-        appendLog('ray', data.reply || JSON.stringify(data));
+        // Just dump the JSON for now so we can see what the API returns
+        appendLog('ray', JSON.stringify(data));
       } catch (err) {
         appendLog('err', String(err), true);
       }
