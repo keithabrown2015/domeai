@@ -1,57 +1,36 @@
-import { NextRequest, NextResponse } from 'next/server';
+// Simple Vercel serverless function for testing the relay.
+// No Next.js imports, no Google API calls yet.
 
-export const dynamic = 'force-dynamic';
-
-export async function POST(request: NextRequest) {
-  const appToken = request.headers.get('x-app-token');
-
-  if (appToken !== process.env.APP_TOKEN) {
-    console.log('❌ Unauthorized request to /api/google-search');
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export default async function handler(req: any, res: any) {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed', method: req.method });
+    return;
   }
 
   try {
-    const body = await request.json();
-    const { query, num } = body;
+    const body = req.body || {};
+    const query = body.query;
+    const num = body.num ?? 3;
 
     if (!query) {
-      return NextResponse.json({ error: 'Query is required' }, { status: 400 });
+      res.status(400).json({ error: 'Query is required' });
+      return;
     }
 
-    const apiKey = process.env.GOOGLE_API_KEY;
-    const cx = process.env.GOOGLE_CX;
-
-    if (!apiKey || !cx) {
-      console.error('❌ Missing Google credentials');
-      return NextResponse.json(
-        { error: 'Server configuration error' },
-        { status: 500 }
-      );
-    }
-
-    const searchURL = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(query)}&num=${num || 10}`;
-
-    console.log('🔍 Google Search for:', query);
-    const response = await fetch(searchURL);
-
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('❌ Google API error:', response.status, error);
-      return NextResponse.json(
-        { error: 'Google Search API error', details: error },
-        { status: response.status }
-      );
-    }
-
-    const data = await response.json();
-    console.log('✅ Search success:', data.items?.length || 0, 'results');
-    return NextResponse.json(data);
+    // For now, just echo back what we got so we can see the pipeline is alive.
+    res.status(200).json({
+      ok: true,
+      relay: 'google-search placeholder',
+      received: {
+        query,
+        num,
+      },
+      message: `Relay is alive. You asked: "${query}".`,
+    });
   } catch (error: any) {
-    console.error('❌ Search relay error:', error.message);
-    return NextResponse.json(
-      { error: 'Internal server error', message: error.message },
-      { status: 500 }
-    );
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error?.message ?? String(error),
+    });
   }
 }
-
