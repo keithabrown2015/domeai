@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DomeAI · Ray Console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #050509;
+      --card: #101019;
+      --accent: #ffd54a;
+      --accent-soft: #ffe37f22;
+      --text: #f7f7ff;
+      --muted: #9ca3af;
+      --danger: #f97373;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+      background: radial-gradient(circle at top, #1f2933 0, #020308 60%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .shell {
+      width: 100%;
+      max-width: 960px;
+      padding: 24px;
+    }
+
+    .card {
+      background: linear-gradient(145deg, #0b0b13, #171729);
+      border-radius: 18px;
+      padding: 20px 22px;
+      border: 1px solid #ffffff11;
+      box-shadow: 0 22px 55px rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(18px);
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brain-dot {
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 20%, #fff7cc, #ffb300);
+      box-shadow: 0 0 18px rgba(255, 215, 64, 0.8);
+    }
+
+    h1 {
+      font-size: 20px;
+      margin: 0;
+      letter-spacing: 0.03em;
+    }
+
+    .status-pill {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #16a34a33;
+      color: #bbf7d0;
+      border: 1px solid #16a34a77;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-pill span.dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: #22c55e;
+      box-shadow: 0 0 6px #22c55e;
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+      gap: 18px;
+      margin-top: 12px;
+    }
+
+    @media (max-width: 800px) {
+      .layout {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .panel {
+      background: #05071299;
+      border-radius: 14px;
+      border: 1px solid #ffffff10;
+      padding: 14px;
+    }
+
+    .panel-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      resize: vertical;
+      background: #020309;
+      border-radius: 10px;
+      border: 1px solid #4b5563;
+      padding: 10px;
+      color: var(--text);
+      font: inherit;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent-soft);
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    button {
+      border-radius: 999px;
+      border: none;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      background: radial-gradient(circle at 30% 5%, #fff7c2, #ffb300);
+      color: #020309;
+      box-shadow: 0 12px 28px rgba(255, 184, 0, 0.65);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid #4b5563;
+      color: var(--muted);
+    }
+
+    .log {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 11px;
+      background: #020308;
+      border-radius: 10px;
+      border: 1px solid #1f2937;
+      padding: 10px;
+      height: 150px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    .log-line {
+      margin-bottom: 4px;
+    }
+
+    .log-line span.tag {
+      display: inline-block;
+      min-width: 44px;
+      text-align: right;
+      margin-right: 6px;
+      color: #6b7280;
+    }
+
+    .log-line span.text {
+      color: #e5e7eb;
+    }
+
+    .log-line.error span.text {
+      color: var(--danger);
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .badge {
+      font-size: 10px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      border: 1px solid #4b5563;
+      color: #e5e7eb;
+      background: #02030899;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="card">
+      <div class="header">
+        <div>
+          <div class="title-row">
+            <div class="brain-dot"></div>
+            <h1>DomeAI · Ray Control</h1>
+          </div>
+          <div class="sub">
+            Frontend placeholder is running. Once the relay is wired up,
+            this console will talk to your API.
+          </div>
+        </div>
+        <div>
+          <div class="status-pill">
+            <span class="dot"></span>
+            <span>frontend online</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="layout">
+        <div class="panel">
+          <div class="panel-title">Send a test prompt</div>
+          <textarea id="prompt" placeholder="Talk to Ray here…"></textarea>
+          <div class="controls">
+            <button class="btn-secondary" id="clear-btn">Clear</button>
+            <button class="btn-primary" id="send-btn">Send to API</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Relay debug log</div>
+          <div id="log" class="log"></div>
+          <div class="badge-row">
+            <div class="badge">OpenAI key: env</div>
+            <div class="badge">Google key: env</div>
+            <div class="badge">Relay: /api/…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const logEl = document.getElementById('log');
+    const promptEl = document.getElementById('prompt');
+    const sendBtn = document.getElementById('send-btn');
+    const clearBtn = document.getElementById('clear-btn');
+
+    function appendLog(tag, text, isError = false) {
+      const line = document.createElement('div');
+      line.className = 'log-line' + (isError ? ' error' : '');
+      const spanTag = document.createElement('span');
+      spanTag.className = 'tag';
+      spanTag.textContent = '[' + tag + ']';
+      const spanText = document.createElement('span');
+      spanText.className = 'text';
+      spanText.textContent = text;
+      line.appendChild(spanTag);
+      line.appendChild(spanText);
+      logEl.appendChild(line);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    clearBtn.addEventListener('click', () => {
+      logEl.innerHTML = '';
+      promptEl.value = '';
+    });
+
+    sendBtn.addEventListener('click', async () => {
+      const text = promptEl.value.trim();
+      if (!text) {
+        appendLog('ui', 'Nothing to send.');
+        return;
+      }
+
+      appendLog('ui', 'Sending prompt to backend…');
+
+      try {
+        // NOTE: we will update this URL later once the relay endpoint is confirmed.
+        const res = await fetch('/api/openai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text })
+        });
+
+        if (!res.ok) {
+          const t = await res.text();
+          appendLog('err', 'HTTP ' + res.status + ': ' + t, true);
+          return;
+        }
+
+        const data = await res.json().catch(() => null);
+        if (!data) {
+          appendLog('api', 'Got response but could not parse JSON.', true);
+          return;
+        }
+
+        appendLog('ray', data.reply || JSON.stringify(data));
+      } catch (err) {
+        appendLog('err', String(err), true);
+      }
+    });
+  </script>
+</body>
+</html>
