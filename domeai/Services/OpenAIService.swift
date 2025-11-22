@@ -26,7 +26,7 @@ class OpenAIService {
         print("RAY_RELAY_URL = \(url.absoluteString)")
         print("🎯 Request URL: \(url.absoluteString)")
         
-        // Extract the user's query from messages (use last user message, or combine all user messages)
+        // Extract the user's query from messages (use last user message)
         let userMessages = messages.filter { $0.isFromUser }
         let userQuery: String
         if let lastUserMessage = userMessages.last {
@@ -37,15 +37,25 @@ class OpenAIService {
             throw OpenAIServiceError.invalidQuery
         }
         
+        // Build conversation history (last 10 message pairs = 20 messages total)
+        let recentMessages = Array(messages.suffix(20))
+        let conversationHistory: [[String: String]] = recentMessages.map { message in
+            [
+                "role": message.isFromUser ? "user" : "assistant",
+                "content": message.content
+            ]
+        }
+        
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "X-App-Token")
         request.timeoutInterval = 30
         
-        // New /api/ray endpoint expects: { "query": "user message" }
+        // /api/ray endpoint expects: { "query": "current message", "conversationHistory": [...] }
         let requestBody: [String: Any] = [
-            "query": userQuery
+            "query": userQuery,
+            "conversationHistory": conversationHistory
         ]
         
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)

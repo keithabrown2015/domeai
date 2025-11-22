@@ -18,11 +18,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     // Parse request body
-    const { query, messages } = req.body;
+    const { query, conversationHistory } = req.body;
     
-    // Use query from body or first user message
-    const userQuery = query || (messages && Array.isArray(messages) && messages.length > 0 
-      ? messages[messages.length - 1]?.content 
+    // Extract user query
+    const userQuery = query || (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0
+      ? conversationHistory[conversationHistory.length - 1]?.content
       : null);
 
     if (!userQuery || typeof userQuery !== 'string') {
@@ -31,6 +31,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         message: 'Missing or invalid "query" field in request body' 
       });
     }
+
+    // Use conversationHistory if provided, otherwise create from query
+    const messagesArray = conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0
+      ? conversationHistory
+      : [
+          {
+            role: 'user',
+            content: userQuery
+          }
+        ];
 
     // Check for OpenAI API key
     const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -124,12 +134,6 @@ Be decisive and choose the most appropriate tier.`
       console.log('🤖 Tier 1: Using gpt-4o-mini');
       model = 'gpt-4o-mini';
       
-      const messagesArray = messages && Array.isArray(messages) ? messages : [
-        {
-          role: 'user',
-          content: userQuery
-        }
-      ];
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -211,12 +215,6 @@ IMPORTANT: You cannot actually save or retrieve yet (the Dome UI is being built)
       console.log('🤖 Tier 2: Using gpt-4o');
       model = 'gpt-4o';
       
-      const messagesArray = messages && Array.isArray(messages) ? messages : [
-        {
-          role: 'user',
-          content: userQuery
-        }
-      ];
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
