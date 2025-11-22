@@ -321,13 +321,64 @@ Be conversational, helpful, and efficient. Provide detailed, thoughtful answers 
 
         console.log('✅ Tier 2 fallback response generated');
       } else {
-        // Perform Google Search
+        // STEP 1: Optimize search query
+        console.log('🔍 Optimizing search query...');
+        console.log('🔍 Original query:', userQuery);
+        
+        const queryOptimizerResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${openaiApiKey}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: `The user asked: ${userQuery}
+
+Generate the best Google search query to find current, accurate information to answer this question.
+
+Rules:
+- Remove question words (what, how, when, who)
+- Keep only essential keywords
+- Add year/month if query is time-sensitive (use 2025, November 2025)
+- Make it search-engine friendly
+- Maximum 10 words
+
+Respond with ONLY the search query, nothing else.`
+              }
+            ],
+            temperature: 0.3,
+            max_tokens: 50
+          })
+        });
+
+        let optimizedQuery = userQuery; // Fallback to original if optimization fails
+        
+        if (queryOptimizerResponse.ok) {
+          const optimizerData = await queryOptimizerResponse.json();
+          const optimizedText = optimizerData.choices?.[0]?.message?.content?.trim();
+          
+          if (optimizedText) {
+            optimizedQuery = optimizedText;
+            console.log('✅ Optimized query:', optimizedQuery);
+          } else {
+            console.log('⚠️ No optimized query returned, using original');
+          }
+        } else {
+          console.log('⚠️ Query optimization failed, using original query');
+        }
+        
+        // STEP 2: Perform Google Search with optimized query
         console.log('🌐 Calling Google Custom Search API...');
+        console.log('🔍 Using search query:', optimizedQuery);
         
         const googleSearchUrl = new URL('https://www.googleapis.com/customsearch/v1');
         googleSearchUrl.searchParams.set('key', googleApiKey);
         googleSearchUrl.searchParams.set('cx', googleCx);
-        googleSearchUrl.searchParams.set('q', userQuery);
+        googleSearchUrl.searchParams.set('q', optimizedQuery);
         googleSearchUrl.searchParams.set('num', '3');
 
         const googleResponse = await fetch(googleSearchUrl.toString());
