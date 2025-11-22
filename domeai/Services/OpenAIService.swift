@@ -11,88 +11,100 @@ import UIKit
 class OpenAIService {
     static let shared = OpenAIService()
     
-    private let chatRelayURL = "\(Config.vercelBaseURL)/api/openai"
+    private let rayRelayURL = "\(Config.vercelBaseURL)/api/ray"
     private let visionURL = "\(Config.vercelBaseURL)/api/vision"
     
     private init() {}
     
     func sendChatMessage(messages: [Message], systemPrompt: String, model: String = "gpt-4o-mini") async throws -> String {
-        // RAY_OPENAI_CONTEXT_UPGRADE_START
-        print("🤖 OpenAI: Processing \(messages.count) messages via relay")
+        print("🎯 Ray: Processing \(messages.count) messages via smart routing")
         
-        guard let url = URL(string: chatRelayURL) else {
+        guard let url = URL(string: rayRelayURL) else {
             throw OpenAIServiceError.invalidURL
         }
         
         print("RAY_RELAY_URL = \(url.absoluteString)")
-        print("🤖 Request URL: \(url.absoluteString)")
+        print("🎯 Request URL: \(url.absoluteString)")
+        
+        // Extract the user's query from messages (use last user message, or combine all user messages)
+        let userMessages = messages.filter { $0.isFromUser }
+        let userQuery: String
+        if let lastUserMessage = userMessages.last {
+            userQuery = lastUserMessage.content
+        } else if let firstMessage = messages.first {
+            userQuery = firstMessage.content
+        } else {
+            throw OpenAIServiceError.invalidQuery
+        }
+        
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "X-App-Token")
         request.timeoutInterval = 30
         
-        var chatMessages: [ChatCompletionMessageRequest] = [
-            ChatCompletionMessageRequest(role: "system", content: systemPrompt)
+        // New /api/ray endpoint expects: { "query": "user message" }
+        let requestBody: [String: Any] = [
+            "query": userQuery
         ]
         
-        let relevantMessages = messages.suffix(10)
-        relevantMessages.forEach { message in
-            let role = message.isFromUser ? "user" : "assistant"
-            chatMessages.append(ChatCompletionMessageRequest(role: role, content: message.content))
-        }
-        
-        let requestPayload = ChatCompletionRequest(
-            model: model,
-            messages: chatMessages,
-            maxTokens: 1000,
-            temperature: 0.7
-        )
-        
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        request.httpBody = try encoder.encode(requestPayload)
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         
         if let bodyString = String(data: request.httpBody ?? Data(), encoding: .utf8) {
             print("RAY_REQUEST_BODY =", bodyString)
         }
         
-        print("🤖 Sending request to relay...")
+        print("🎯 Sending request to Ray relay...")
         let (data, response) = try await URLSession.shared.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw OpenAIServiceError.invalidResponse
         }
         
-        print("🤖 Status code: \(httpResponse.statusCode)")
+        print("🎯 Status code: \(httpResponse.statusCode)")
         
         guard httpResponse.statusCode == 200 else {
             let errorString = String(data: data, encoding: .utf8) ?? "No error details"
-            print("🔴 Vercel Relay Error - Status: \(httpResponse.statusCode)")
+            print("🔴 Ray Relay Error - Status: \(httpResponse.statusCode)")
             print("🔴 Error Response: \(errorString)")
-            print("🔴 Request URL: \(chatRelayURL)")
+            print("🔴 Request URL: \(rayRelayURL)")
             throw OpenAIServiceError.httpError(httpResponse.statusCode)
         }
         
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        
-        if let errorPayload = try? decoder.decode(OpenAIErrorPayload.self, from: data) {
-            let errorMessage = errorPayload.error.message
-            print("🔴 OpenAI Error:", errorMessage)
-            throw OpenAIServiceError.apiError(errorMessage)
-        }
-        
-        let completionResponse = try decoder.decode(ChatCompletionResponse.self, from: data)
-        
-        guard let content = completionResponse.choices.first?.message.content else {
-            print("⚠️ Relay response did not contain expected fields")
+        // Parse new response format: { "ok": true, "tier": 1|2|3, "model": "...", "message": "...", "reasoning": "...", "sources": [...] }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("🔴 Invalid JSON response")
             throw OpenAIServiceError.invalidResponse
         }
         
-        print("🤖 Relay response: \(content.prefix(100))...")
-        return content
-        // RAY_OPENAI_CONTEXT_UPGRADE_END
+        guard let ok = json["ok"] as? Bool, ok else {
+            if let errorMessage = json["error"] as? String {
+                print("🔴 Ray Error:", errorMessage)
+                throw OpenAIServiceError.apiError(errorMessage)
+            }
+            throw OpenAIServiceError.invalidResponse
+        }
+        
+        // Extract message from response
+        guard let message = json["message"] as? String else {
+            print("⚠️ Ray response did not contain message field")
+            throw OpenAIServiceError.invalidResponse
+        }
+        
+        // Log tier and model info
+        if let tier = json["tier"] as? Int,
+           let model = json["model"] as? String,
+           let reasoning = json["reasoning"] as? String {
+            print("🎯 Tier: \(tier), Model: \(model), Reasoning: \(reasoning)")
+        }
+        
+        // Log sources if present
+        if let sources = json["sources"] as? [String], !sources.isEmpty {
+            print("🔍 Sources: \(sources.count) found")
+        }
+        
+        print("✅ Ray response: \(message.prefix(100))...")
+        return message
     }
     
     // MARK: - Image Analysis
@@ -163,6 +175,7 @@ class OpenAIService {
 
 enum OpenAIServiceError: LocalizedError {
     case invalidURL
+    case invalidQuery
     case jsonEncodingFailed
     case invalidResponse
     case httpError(Int)
@@ -173,14 +186,16 @@ enum OpenAIServiceError: LocalizedError {
         switch self {
         case .invalidURL:
             return "Invalid API URL"
+        case .invalidQuery:
+            return "Invalid query - no user message found"
         case .jsonEncodingFailed:
             return "Failed to encode request body"
         case .invalidResponse:
-            return "Invalid response from OpenAI API"
+            return "Invalid response from Ray API"
         case .httpError(let code):
             return "HTTP error: \(code)"
         case .apiError(let message):
-            return "OpenAI API error: \(message)"
+            return "Ray API error: \(message)"
         case .networkError(let error):
             return "Network error: \(error.localizedDescription)"
         }
@@ -262,4 +277,5 @@ struct ChatCompletionMessageRequest: Encodable {
     let role: String
     let content: String
 }
+
 
