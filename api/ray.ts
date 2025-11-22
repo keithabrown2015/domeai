@@ -388,9 +388,15 @@ Be conversational, helpful, and efficient. Provide detailed, thoughtful answers 
           sources = searchResults.map(r => r.link);
           console.log(`✅ Found ${searchResults.length} search results`);
 
-          // Summarize with gpt-4o-mini
-          const contextPrompt = `User query: ${userQuery}\n\nSearch results:\n${searchResults.map((r, i) => `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.link}`).join('\n\n')}\n\nSynthesize a natural answer using the search results above. Cite sources naturally in your response.`;
+          // Format search results clearly with titles, snippets, and URLs
+          const formattedResults = searchResults.map((r, i) => 
+            `RESULT ${i + 1}:
+TITLE: ${r.title}
+SNIPPET: ${r.snippet}
+URL: ${r.link}`
+          ).join('\n\n');
 
+          // Summarize with gpt-4o-mini - STRICT prompt to use ONLY search results
           const summaryResponse = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -402,11 +408,25 @@ Be conversational, helpful, and efficient. Provide detailed, thoughtful answers 
               messages: [
                 {
                   role: 'system',
-                  content: `You are Ray, a sharp, friendly AI assistant living inside DomeAI. Use the provided search results to answer the query. Cite sources naturally.`
-                },
-                {
-                  role: 'user',
-                  content: contextPrompt
+                  content: `You are Ray, an AI assistant. The user asked: ${userQuery}
+
+I searched Google and found these REAL, CURRENT results:
+
+${formattedResults}
+
+CRITICAL INSTRUCTIONS:
+
+1. Answer ONLY using information from these search results
+
+2. If the search results contain current data (rankings, numbers, dates), use EXACTLY those values
+
+3. DO NOT use your training data - use ONLY what's in the search results above
+
+4. If search results are incomplete, say so - do NOT fill gaps with old knowledge
+
+5. Cite sources when possible
+
+Your answer:`
                 }
               ],
               temperature: 0.7,
