@@ -1,24 +1,31 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-export const dynamic = 'force-dynamic';
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // Only accept POST requests
+  if (req.method !== 'POST') {
+    return res.status(405).json({ 
+      error: 'Method not allowed', 
+      message: 'Only POST requests are accepted' 
+    });
+  }
 
-export async function POST(request: NextRequest) {
-  const appToken = request.headers.get('x-app-token');
-
+  // Check x-app-token header
+  const appToken = req.headers['x-app-token'];
   if (appToken !== process.env.APP_TOKEN) {
     console.log('❌ Unauthorized request to /api/openai');
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
-    const body = await request.json();
-    const { messages, model, max_tokens, temperature } = body;
+    // Read request body
+    const { messages, model, max_tokens, temperature } = req.body;
 
     console.log('🤖 OpenAI relay:', {
       messageCount: messages?.length,
       model: model || 'gpt-4o-mini',
     });
 
+    // Forward to OpenAI API
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -36,22 +43,21 @@ export async function POST(request: NextRequest) {
     if (!response.ok) {
       const error = await response.text();
       console.error('❌ OpenAI API error:', response.status, error);
-      return NextResponse.json(
-        { error: 'OpenAI API error', details: error },
-        { status: response.status }
-      );
+      return res.status(response.status).json({
+        error: 'OpenAI API error',
+        details: error,
+      });
     }
 
     const data = await response.json();
     console.log('RAW OPENAI RESPONSE:', JSON.stringify(data, null, 2));
     console.log('✅ OpenAI success');
-    return NextResponse.json(data);
+    return res.status(200).json(data);
   } catch (error: any) {
     console.error('❌ Relay error:', error.message);
-    return NextResponse.json(
-      { error: 'Internal server error', message: error.message },
-      { status: 500 }
-    );
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message || 'Unknown error occurred',
+    });
   }
 }
-

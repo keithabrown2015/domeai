@@ -1,14 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Only accept POST requests
-  if (req.method !== 'POST') {
-    return res.status(405).json({ 
-      error: 'Method not allowed', 
-      message: 'Only POST requests are accepted' 
-    });
-  }
-
   try {
     // Parse request body
     const { query, num } = req.body;
@@ -100,3 +92,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 }
+
