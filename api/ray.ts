@@ -439,15 +439,14 @@ Respond with ONLY the search query, nothing else.`
           sources = searchResults.map(r => r.link);
           console.log(`✅ Found ${searchResults.length} search results`);
 
-          // Format search results clearly with titles, snippets, and URLs
+          // Format search results clearly with Source 1, Source 2, etc.
           const formattedResults = searchResults.map((r, i) => 
-            `RESULT ${i + 1}:
-TITLE: ${r.title}
-SNIPPET: ${r.snippet}
+            `Source ${i + 1}: ${r.title}
+Content: ${r.snippet}
 URL: ${r.link}`
           ).join('\n\n');
 
-          // Summarize with gpt-4o-mini - STRICT prompt to use ONLY search results
+          // Synthesize with gpt-4o (smarter at extracting info)
           const summaryResponse = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -455,29 +454,27 @@ URL: ${r.link}`
               'Authorization': `Bearer ${openaiApiKey}`
             },
             body: JSON.stringify({
-              model: 'gpt-4o-mini',
+              model: 'gpt-4o',
               messages: [
                 {
                   role: 'system',
-                  content: `You are Ray, an AI assistant. The user asked: ${userQuery}
+                  content: `You are Ray, a smart AI assistant helping the user with current information.
 
-I searched Google and found these REAL, CURRENT results:
+The user asked: ${userQuery}
+
+I searched Google and found these current sources:
 
 ${formattedResults}
 
-CRITICAL INSTRUCTIONS:
+Your job: Answer the user's question using these sources.
 
-1. Answer ONLY using information from these search results
+IMPORTANT: These search result snippets often contain the exact data the user wants (population numbers, rankings, dates, etc.). Look carefully at the snippets and extract the specific information requested.
 
-2. If the search results contain current data (rankings, numbers, dates), use EXACTLY those values
+If you see population numbers, rankings, scores, or other data in the snippets - USE THEM. Don't say "the sources don't contain this" if the data is clearly there in the snippet text.
 
-3. DO NOT use your training data - use ONLY what's in the search results above
+If the sources truly don't have the answer, admit it and suggest where to look.
 
-4. If search results are incomplete, say so - do NOT fill gaps with old knowledge
-
-5. Cite sources when possible
-
-Your answer:`
+Be helpful and confident. Answer in 2-3 clear sentences.`
                 }
               ],
               temperature: 0.7,
