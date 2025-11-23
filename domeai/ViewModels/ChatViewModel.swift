@@ -87,11 +87,17 @@ class ChatViewModel: ObservableObject {
     
     // MARK: - Message Handling
     
+    /// SIMPLE, EXPLICIT TEXT CHAT SEND PATH
+    /// This function handles sending text messages to Ray
+    /// It maintains conversation history by appending to the messages array
     func sendMessage(content: String) {
-        print("🟢 ChatViewModel.sendMessage called with: '\(content)'")
+        print("\n" + String(repeating: "=", count: 80))
+        print("📤 SEND MESSAGE CALLED")
+        print("📤 Input content: \"\(content.prefix(80))\"")
+        print("📤 Current messages array count: \(messages.count)")
         
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || currentAttachment != nil else {
-            print("🟢 sendMessage: Empty content, returning")
+            print("📤 Empty content, returning")
             return
         }
         
@@ -105,26 +111,8 @@ class ChatViewModel: ObservableObject {
             messageContent = content.isEmpty ? "Please analyze this image" : content
         }
         
-        // RAY'S CONVERSATION MEMORY:
-        // CRITICAL: The messages array MUST persist across all requests
-        // We append to the existing array, NEVER replace it
-        
-        // CRITICAL: Log state BEFORE adding the new message
-        print("\n" + String(repeating: "=", count: 80))
-        print("🟢 BEFORE ADDING USER MESSAGE:")
-        print("🟢 Current messages count: \(messages.count)")
-        if messages.count > 0 {
-            print("🟢 Last message was: \(messages.last?.isFromUser == true ? "USER" : "ASSISTANT")")
-            print("🟢 Last message content: \(messages.last?.content.prefix(50) ?? "unknown")")
-            print("🟢 Full messages array BEFORE adding new message:")
-            for (index, msg) in messages.enumerated() {
-                let role = msg.isFromUser ? "USER" : "ASSISTANT"
-                let preview = msg.content.count > 60 ? String(msg.content.prefix(60)) + "..." : msg.content
-                print("🟢   [\(index + 1)] \(role): \"\(preview)\"")
-            }
-        }
-        
-        // Create the new user message
+        // STEP 1: Append user message to the persistent messages array
+        // This array is the SINGLE SOURCE OF TRUTH for conversation history
         let userMessage = Message(
             content: messageContent,
             isFromUser: true,
@@ -132,45 +120,119 @@ class ChatViewModel: ObservableObject {
             attachmentType: attachmentType
         )
         
-        // CRITICAL: Append to existing array (DO NOT replace!)
+        print("📤 BEFORE APPENDING: messages.count = \(messages.count)")
         messages.append(userMessage)
+        print("📤 AFTER APPENDING: messages.count = \(messages.count)")
         
-        // CRITICAL DEBUG: Log conversation state after adding user message
-        print("🟢 AFTER ADDING USER MESSAGE:")
-        print("🟢 New message content: \(messageContent.prefix(100))")
-        print("🟢 Total messages in array: \(messages.count)")
-        print("🟢 Full conversation state AFTER adding:")
+        // Log full messages array
+        print("📤 FULL MESSAGES ARRAY NOW:")
         for (index, msg) in messages.enumerated() {
             let role = msg.isFromUser ? "USER" : "ASSISTANT"
-            let preview = msg.content.count > 80 ? String(msg.content.prefix(80)) + "..." : msg.content
-            print("🟢   [\(index + 1)] \(role): \"\(preview)\"")
+            print("📤   [\(index + 1)] \(role): \"\(msg.content.prefix(60))\"")
         }
-        print(String(repeating: "=", count: 80) + "\n")
         
-        // Clear attachment after saving to message
+        // Save to storage
         currentAttachment = nil
-        
-        // Persist conversation history to storage IMMEDIATELY (synchronously on main thread)
-        // This ensures the conversation is saved before processing
         storageService.saveMessages(messages)
-        print("💾 Saved \(messages.count) messages to storage")
         
-        // CRITICAL: Verify messages array still has all messages before processing
-        print("🟢 VERIFICATION: About to call processUserMessage with \(messages.count) messages in array")
-        if messages.count == 0 {
-            print("❌ CRITICAL ERROR: Messages array is EMPTY before processUserMessage!")
-        } else if messages.count == 1 {
-            print("✅ OK: 1 message (first message of conversation)")
-        } else {
-            print("✅ GOOD: \(messages.count) messages (conversation history is maintained)")
-        }
-        
-        // Process immediately - this will send full conversation history to API
-        // CRITICAL: Pass the current messages array count for verification
-        let messagesCountBeforeProcessing = messages.count
+        // STEP 2: Send to API with FULL conversation history
         Task {
-            await processUserMessage(content: messageContent, attachment: attachmentData, expectedMessagesCount: messagesCountBeforeProcessing)
+            await sendMessageToAPI(userMessageContent: messageContent, attachment: attachmentData)
         }
+    }
+    
+    /// SIMPLE, EXPLICIT API SEND FUNCTION
+    /// This function sends the FULL messages array to the backend
+    private func sendMessageToAPI(userMessageContent: String, attachment: Data?) async {
+        print("\n" + String(repeating: "=", count: 80))
+        print("📡 SENDING TO API")
+        
+        // STEP 1: Capture the FULL messages array
+        // This should contain ALL previous messages + the new user message
+        let allMessages = await MainActor.run {
+            print("📡 Capturing messages array on MainActor")
+            print("📡 messages.count = \(messages.count)")
+            return messages
+        }
+        
+        print("📡 allMessages.count = \(allMessages.count)")
+        print("📡 Full allMessages array:")
+        for (index, msg) in allMessages.enumerated() {
+            let role = msg.isFromUser ? "USER" : "ASSISTANT"
+            print("📡   [\(index + 1)] \(role): \"\(msg.content.prefix(60))\"")
+        }
+        
+        // STEP 2: Build conversationHistory from ALL messages
+        // This is what gets sent to the backend
+        let conversationHistory: [[String: String]] = allMessages.map { msg in
+            [
+                "role": msg.isFromUser ? "user" : "assistant",
+                "content": msg.content
+            ]
+        }
+        
+        print("\n📡 conversationHistory built from \(allMessages.count) messages")
+        print("📡 conversationHistory count: \(conversationHistory.count)")
+        print("📡 conversationHistory contents:")
+        for (index, msg) in conversationHistory.enumerated() {
+            let role = msg["role"] ?? "?"
+            let content = msg["content"] ?? ""
+            print("📡   [\(index + 1)] \(role.uppercased()): \"\(content.prefix(60))\"")
+        }
+        
+        // CRITICAL VERIFICATION
+        if conversationHistory.count == 1 {
+            print("❌ ERROR: conversationHistory only has 1 message!")
+            print("❌ This should only happen on the FIRST message")
+            print("❌ If this is NOT the first message, conversation history was lost!")
+        } else {
+            print("✅ GOOD: conversationHistory has \(conversationHistory.count) messages")
+        }
+        
+        // STEP 3: Build system prompt
+        let raySystemPrompt = """
+        You are Ray, a sharp, friendly AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
+        
+        Be conversational, helpful, and efficient. Answer in 2-3 sentences unless more detail is needed. Use natural language, not robotic responses.
+        
+        IMPORTANT:
+        - Maintain conversational context - use what was said earlier in THIS conversation
+        - Be specific and direct with answers
+        - If you don't know something, be honest but helpful
+        
+        Answer naturally and conversationally.
+        """
+        
+        // STEP 4: Call the API service with the FULL messages array
+        // The service will build the request body using conversationHistory
+        do {
+            await MainActor.run { isProcessing = true }
+            
+            let response = try await OpenAIService.shared.sendChatMessageWithHistory(
+                messages: allMessages,
+                conversationHistory: conversationHistory,
+                systemPrompt: raySystemPrompt,
+                model: Config.defaultModel
+            )
+            
+            // STEP 4: Append Ray's response to messages array
+            await MainActor.run {
+                let rayResponse = Message(content: response, isFromUser: false)
+                messages.append(rayResponse)
+                storageService.saveMessages(messages)
+                print("📡 Added Ray's response. Total messages: \(messages.count)")
+                isProcessing = false
+            }
+        } catch {
+            print("❌ Error: \(error)")
+            await MainActor.run {
+                messages.append(Message(content: "I'm having trouble processing that right now. Error: \(error.localizedDescription)", isFromUser: false))
+                storageService.saveMessages(messages)
+                isProcessing = false
+            }
+        }
+        
+        print(String(repeating: "=", count: 80) + "\n")
     }
     
     // MARK: - AI Processing

@@ -16,6 +16,75 @@ class OpenAIService {
     
     private init() {}
     
+    /// NEW SIMPLE FUNCTION: Send chat message with explicit conversationHistory
+    /// This function receives the conversationHistory already built, ensuring it's correct
+    func sendChatMessageWithHistory(messages: [Message], conversationHistory: [[String: String]], systemPrompt: String, model: String = "gpt-4o-mini") async throws -> String {
+        print("\n" + String(repeating: "=", count: 80))
+        print("📤 sendChatMessageWithHistory CALLED")
+        print("📤 Received messages.count: \(messages.count)")
+        print("📤 Received conversationHistory.count: \(conversationHistory.count)")
+        
+        // CRITICAL VERIFICATION: conversationHistory should match messages count
+        if conversationHistory.count != messages.count {
+            print("❌ ERROR: conversationHistory count (\(conversationHistory.count)) != messages count (\(messages.count))")
+        }
+        
+        guard let url = URL(string: rayRelayURL) else {
+            throw OpenAIServiceError.invalidURL
+        }
+        
+        // Extract user query (last user message)
+        let userMessages = messages.filter { $0.isFromUser }
+        guard let userQuery = userMessages.last?.content else {
+            throw OpenAIServiceError.invalidQuery
+        }
+        
+        // Build request body with the conversationHistory we received
+        let requestBody: [String: Any] = [
+            "query": userQuery,
+            "conversationHistory": conversationHistory
+        ]
+        
+        // CRITICAL DEBUG: Log exactly what we're sending
+        print("📤 REQUEST BODY:")
+        print("📤   query: \"\(userQuery.prefix(60))\"")
+        print("📤   conversationHistory.count: \(conversationHistory.count)")
+        print("📤   conversationHistory:")
+        for (index, msg) in conversationHistory.enumerated() {
+            let role = msg["role"] ?? "?"
+            let content = msg["content"] ?? ""
+            print("📤     [\(index + 1)] \(role.uppercased()): \"\(content.prefix(60))\"")
+        }
+        print(String(repeating: "=", count: 80) + "\n")
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "X-App-Token")
+        request.timeoutInterval = 30
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenAIServiceError.invalidResponse
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorString = String(data: data, encoding: .utf8) ?? "No error details"
+            throw OpenAIServiceError.httpError(httpResponse.statusCode)
+        }
+        
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ok = json["ok"] as? Bool, ok,
+              let message = json["message"] as? String else {
+            throw OpenAIServiceError.invalidResponse
+        }
+        
+        return message
+    }
+    
+    /// OLD FUNCTION: Keep for backward compatibility but mark as deprecated
     func sendChatMessage(messages: [Message], systemPrompt: String, model: String = "gpt-4o-mini") async throws -> String {
         print("🎯 Ray: Processing message via smart routing")
         
