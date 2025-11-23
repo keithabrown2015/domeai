@@ -100,8 +100,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('📥 conversationHistory length:', conversationHistory && Array.isArray(conversationHistory) ? conversationHistory.length : 0);
     
     if (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-      // Frontend already includes the current user message as the last message
-      // So we can use the conversationHistory directly
+      // Frontend sends conversation history, but we need to ensure the last message
+      // matches the current query exactly (in case it was incomplete or different)
       messagesArray = [...conversationHistory];
       
       console.log('📥 Received', messagesArray.length, 'messages in conversation history');
@@ -113,15 +113,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log(`📥   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
       });
       
-      // Verify the last message is the current user query
+      // CRITICAL: Ensure the last message matches the current user query exactly
+      // The current query (req.body.query) is the source of truth
       const lastMsg = messagesArray[messagesArray.length - 1];
-      if (lastMsg && lastMsg.role === 'user' && lastMsg.content === userQuery) {
-        console.log('✅ Current user query is already in conversation history (as expected)');
+      if (lastMsg && lastMsg.role === 'user') {
+        if (lastMsg.content === userQuery) {
+          console.log('✅ Last message in conversation history matches current query');
+        } else {
+          console.log('⚠️ Last message in conversation history does NOT match current query');
+          console.log('⚠️ Last message content:', lastMsg.content);
+          console.log('⚠️ Current query:', userQuery);
+          console.log('⚠️ Replacing last message with current query (using req.body.query as source of truth)');
+          // Replace the last message with the current query (req.body.query is the source of truth)
+          messagesArray[messagesArray.length - 1] = {
+            role: 'user',
+            content: userQuery
+          };
+        }
       } else {
-        console.log('⚠️ WARNING: Current user query might not be in conversation history');
-        console.log('⚠️ Last message:', JSON.stringify(lastMsg, null, 2));
-        console.log('⚠️ Current query:', userQuery);
-        // Add it if missing
+        // Last message is not a user message, add current query
+        console.log('⚠️ Last message is not a user message, adding current query');
         messagesArray.push({
           role: 'user',
           content: userQuery
