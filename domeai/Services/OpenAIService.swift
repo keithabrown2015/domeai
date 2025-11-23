@@ -42,9 +42,24 @@ class OpenAIService {
         // This ensures Ray sees the full conversation context, not just the current message
         // Format: OpenAI chat format with "role" (user/assistant) and "content" (message text)
         
-        // CRITICAL: Ensure we're sending ALL messages, not just recent ones
-        // The messages array should contain the FULL conversation history
-        let conversationHistory: [[String: String]] = messages.map { message in
+        // CRITICAL: Limit history size to avoid memory issues
+        // If we have more than 20 messages, trim the oldest ones but keep recent exchanges
+        let maxHistoryMessages = 20
+        let messagesToInclude: [Message]
+        if messages.count > maxHistoryMessages {
+            // Keep the most recent messages (preserves recent conversation turns)
+            // Always keep at least the last 10 messages for continuity
+            let messagesToKeep = max(10, maxHistoryMessages)
+            messagesToInclude = Array(messages.suffix(messagesToKeep))
+            print("📤 Trimming conversation history: \(messages.count) -> \(messagesToInclude.count) messages")
+        } else {
+            // Include all messages if we're under the limit
+            messagesToInclude = messages
+        }
+        
+        // CRITICAL: Ensure we're sending ALL messages in the trimmed array
+        // Map each message to the format expected by the backend
+        let conversationHistory: [[String: String]] = messagesToInclude.map { message in
             [
                 "role": message.isFromUser ? "user" : "assistant",
                 "content": message.content
@@ -68,13 +83,18 @@ class OpenAIService {
         
         // VERIFICATION: Ensure conversationHistory has at least the expected number of messages
         // For a conversation with N user messages, we should have at least N messages (user + assistant pairs)
-        let userMessageCount = messages.filter { $0.isFromUser }.count
-        let assistantMessageCount = messages.filter { !$0.isFromUser }.count
+        let userMessageCount = messagesToInclude.filter { $0.isFromUser }.count
+        let assistantMessageCount = messagesToInclude.filter { !$0.isFromUser }.count
         print("📤 VERIFICATION: User messages: \(userMessageCount), Assistant messages: \(assistantMessageCount), Total: \(conversationHistory.count)")
         
-        if conversationHistory.count < userMessageCount {
-            print("⚠️ WARNING: conversationHistory count (\(conversationHistory.count)) is less than user message count (\(userMessageCount))")
-            print("⚠️ This suggests messages are being lost or filtered!")
+        if conversationHistory.count == 0 {
+            print("❌ ERROR: conversationHistory is EMPTY! This should never happen.")
+        } else if conversationHistory.count == 1 && conversationHistory.first?["role"] == "user" {
+            print("⚠️ WARNING: Only 1 user message in conversationHistory.")
+            print("⚠️ This should only happen on the FIRST message of a conversation.")
+            print("⚠️ If this is NOT the first message, conversation history was lost!")
+        } else if conversationHistory.count >= 2 {
+            print("✅ GOOD: Multiple messages in conversationHistory - conversation context is being maintained")
         }
         
         var request = URLRequest(url: url)

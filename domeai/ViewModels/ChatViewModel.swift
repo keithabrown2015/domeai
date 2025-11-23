@@ -64,8 +64,17 @@ class ChatViewModel: ObservableObject {
     
     // MARK: - Loading Data
     
+    /// Load messages from persistent storage
+    /// IMPORTANT: This should only be called on app launch, not during an active conversation
+    /// During a conversation, messages are maintained in memory and only saved to storage
     private func loadMessages() {
-        messages = storageService.loadMessages()
+        let loadedMessages = storageService.loadMessages()
+        messages = loadedMessages
+        print("📂 Loaded \(loadedMessages.count) messages from storage")
+        if loadedMessages.count > 0 {
+            print("📂 First message: \(loadedMessages.first?.content.prefix(50) ?? "unknown")")
+            print("📂 Last message: \(loadedMessages.last?.content.prefix(50) ?? "unknown")")
+        }
     }
     
     private func loadMemories() {
@@ -99,39 +108,47 @@ class ChatViewModel: ObservableObject {
         // RAY'S CONVERSATION MEMORY:
         // Add user message to the conversation history array
         // This message will be included in conversationHistory sent to the API
+        // CRITICAL: We append to the existing array, never replace it
         let userMessage = Message(
             content: messageContent,
             isFromUser: true,
             attachmentData: attachmentData,
             attachmentType: attachmentType
         )
+        
+        // CRITICAL: Log state BEFORE adding the new message
+        print("\n" + String(repeating: "=", count: 80))
+        print("🟢 BEFORE ADDING USER MESSAGE:")
+        print("🟢 Current messages count: \(messages.count)")
+        if messages.count > 0 {
+            print("🟢 Last message was: \(messages.last?.isFromUser == true ? "USER" : "ASSISTANT")")
+            print("🟢 Last message content: \(messages.last?.content.prefix(50) ?? "unknown")")
+        }
+        
+        // Append the new user message to the existing array
         messages.append(userMessage)
         
         // CRITICAL DEBUG: Log conversation state after adding user message
-        let separator = String(repeating: "=", count: 80)
-        print(separator)
-        print("🟢 USER MESSAGE ADDED TO CONVERSATION HISTORY")
-        print("🟢 Message content: \(messageContent.prefix(100))")
+        print("🟢 AFTER ADDING USER MESSAGE:")
+        print("🟢 New message content: \(messageContent.prefix(100))")
         print("🟢 Total messages in array: \(messages.count)")
-        print("🟢 Current conversation state:")
+        print("🟢 Full conversation state:")
         for (index, msg) in messages.enumerated() {
             let role = msg.isFromUser ? "USER" : "ASSISTANT"
             let preview = msg.content.count > 80 ? String(msg.content.prefix(80)) + "..." : msg.content
-            print("🟢   [\(index + 1)] \(role): \(preview)")
+            print("🟢   [\(index + 1)] \(role): \"\(preview)\"")
         }
-        print(separator)
+        print(String(repeating: "=", count: 80) + "\n")
         
         // Clear attachment after saving to message
         currentAttachment = nil
         
-        // Persist conversation history to storage
-        // This ensures conversation persists across app launches
-        let messagesToSave = messages
-        Task.detached {
-            StorageService.shared.saveMessages(messagesToSave)
-        }
+        // Persist conversation history to storage IMMEDIATELY (synchronously on main thread)
+        // This ensures the conversation is saved before processing
+        storageService.saveMessages(messages)
+        print("💾 Saved \(messages.count) messages to storage")
         
-        print("🟢 About to call processUserMessage...")
+        print("🟢 About to call processUserMessage with \(messages.count) messages in array...")
         
         // Process immediately - this will send full conversation history to API
         Task {
@@ -409,8 +426,10 @@ class ChatViewModel: ObservableObject {
             // This is how Ray maintains context across the conversation
             
             // CRITICAL: Capture the messages array at this point to ensure we send the full history
-            // Make a copy to avoid any potential race conditions
-            let messagesToSend = messages
+            // Access it on MainActor to ensure thread safety
+            let messagesToSend = await MainActor.run {
+                return messages
+            }
             
             // CRITICAL DEBUG: Log what we're about to send BEFORE calling the API
             let separator = String(repeating: "=", count: 80)
@@ -431,8 +450,13 @@ class ChatViewModel: ObservableObject {
             
             if messagesToSend.count == 0 {
                 print("❌ ERROR: Messages array is EMPTY! This should never happen.")
+                print("❌ This means conversation history was lost. Check if messages array is being cleared.")
             } else if messagesToSend.count == 1 && messagesToSend.first?.isFromUser == true {
-                print("⚠️ WARNING: Only 1 user message in array. This might be the first message, or messages were lost.")
+                print("⚠️ WARNING: Only 1 user message in array.")
+                print("⚠️ This should only happen on the FIRST message of a conversation.")
+                print("⚠️ If this is NOT the first message, messages were lost!")
+            } else if messagesToSend.count >= 2 {
+                print("✅ GOOD: Multiple messages in array - conversation history is being maintained")
             }
             
             print(separator + "\n")
@@ -445,24 +469,41 @@ class ChatViewModel: ObservableObject {
             
             // Add Ray's response to the conversation history
             // This ensures the next message includes this response in the context
+            // CRITICAL: This must happen on MainActor to ensure thread safety
             await MainActor.run {
+                // Log state BEFORE adding response
+                let beforeCount = messages.count
+                print("\n" + String(repeating: "=", count: 80))
+                print("💬 BEFORE ADDING RAY'S RESPONSE:")
+                print("💬 Current messages count: \(beforeCount)")
+                
+                // Create and append Ray's response
                 let rayResponse = Message(content: response, isFromUser: false)
                 messages.append(rayResponse)
+                
+                // CRITICAL: Save immediately to ensure persistence
                 storageService.saveMessages(messages)
                 
                 // CRITICAL DEBUG: Log conversation state after adding Ray's response
-                let separator = String(repeating: "=", count: 80)
-                print(separator)
-                print("💬 RAY'S RESPONSE ADDED TO CONVERSATION HISTORY")
+                print("💬 AFTER ADDING RAY'S RESPONSE:")
                 print("💬 Response content: \(response.prefix(100))")
-                print("💬 Total messages in array: \(messages.count)")
-                print("💬 Current conversation state:")
+                print("💬 Total messages in array: \(messages.count) (was \(beforeCount))")
+                print("💬 Full conversation state:")
                 for (index, msg) in messages.enumerated() {
                     let role = msg.isFromUser ? "USER" : "ASSISTANT"
                     let preview = msg.content.count > 80 ? String(msg.content.prefix(80)) + "..." : msg.content
-                    print("💬   [\(index + 1)] \(role): \(preview)")
+                    print("💬   [\(index + 1)] \(role): \"\(preview)\"")
                 }
-                print(separator)
+                
+                // VERIFICATION: Ensure response was added
+                if messages.count != beforeCount + 1 {
+                    print("❌ ERROR: Message count didn't increase! Expected \(beforeCount + 1), got \(messages.count)")
+                } else {
+                    print("✅ SUCCESS: Ray's response was added to conversation history")
+                }
+                
+                print("💾 Saved \(messages.count) messages to storage")
+                print(String(repeating: "=", count: 80) + "\n")
                 
                 isProcessing = false
             }
