@@ -47,14 +47,21 @@ class OpenAIService {
                 "content": message.content
             ]
         }
-        print("📤 Sending \(conversationHistory.count) messages as conversation history to Ray API")
-        print("📤 Conversation history includes: \(conversationHistory.count) total messages")
         
-        // Log conversation preview for debugging
-        if conversationHistory.count > 0 {
-            let preview = conversationHistory.suffix(3).map { "\($0["role"] ?? "unknown"): \(($0["content"] ?? "").prefix(50))" }
-            print("📤 Last 3 messages: \(preview.joined(separator: " | "))")
+        // CRITICAL DEBUG LOGGING: Log the full conversation history being sent
+        let separator = String(repeating: "=", count: 80)
+        print(separator)
+        print("📤 OUTGOING OPENAI MESSAGES PAYLOAD:")
+        print("📤 Total messages in conversation history: \(conversationHistory.count)")
+        print("📤 Messages array from ChatViewModel: \(messages.count) messages")
+        print(String(repeating: "-", count: 80))
+        for (index, msg) in conversationHistory.enumerated() {
+            let role = msg["role"] ?? "unknown"
+            let content = msg["content"] ?? ""
+            let preview = content.count > 100 ? String(content.prefix(100)) + "..." : content
+            print("📤 [\(index + 1)] \(role.uppercased()): \(preview)")
         }
+        print(separator)
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

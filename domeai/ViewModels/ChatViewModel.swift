@@ -107,7 +107,19 @@ class ChatViewModel: ObservableObject {
         )
         messages.append(userMessage)
         
-        print("🟢 User message added to conversation history. Total messages: \(messages.count)")
+        // CRITICAL DEBUG: Log conversation state after adding user message
+        let separator = String(repeating: "=", count: 80)
+        print(separator)
+        print("🟢 USER MESSAGE ADDED TO CONVERSATION HISTORY")
+        print("🟢 Message content: \(messageContent.prefix(100))")
+        print("🟢 Total messages in array: \(messages.count)")
+        print("🟢 Current conversation state:")
+        for (index, msg) in messages.enumerated() {
+            let role = msg.isFromUser ? "USER" : "ASSISTANT"
+            let preview = msg.content.count > 80 ? String(msg.content.prefix(80)) + "..." : msg.content
+            print("🟢   [\(index + 1)] \(role): \(preview)")
+        }
+        print(separator)
         
         // Clear attachment after saving to message
         currentAttachment = nil
@@ -395,7 +407,20 @@ class ChatViewModel: ObservableObject {
             // Send the full messages array as conversationHistory to the API
             // The API will pass this entire conversation history to OpenAI so Ray can see previous messages
             // This is how Ray maintains context across the conversation
-            print("💬 Sending conversation history: \(messages.count) messages")
+            
+            // CRITICAL DEBUG: Log what we're about to send BEFORE calling the API
+            let separator = String(repeating: "=", count: 80)
+            print(separator)
+            print("💬 PREPARING TO SEND CONVERSATION HISTORY TO API")
+            print("💬 Messages array count: \(messages.count)")
+            print("💬 Conversation history that will be sent:")
+            for (index, msg) in messages.enumerated() {
+                let role = msg.isFromUser ? "user" : "assistant"
+                let preview = msg.content.count > 80 ? String(msg.content.prefix(80)) + "..." : msg.content
+                print("💬   [\(index + 1)] role: \(role), content: \(preview)")
+            }
+            print(separator)
+            
             let response = try await OpenAIService.shared.sendChatMessage(
                 messages: messages,  // Full conversation history (user + assistant messages)
                 systemPrompt: raySystemPrompt,
@@ -408,7 +433,21 @@ class ChatViewModel: ObservableObject {
                 let rayResponse = Message(content: response, isFromUser: false)
                 messages.append(rayResponse)
                 storageService.saveMessages(messages)
-                print("💬 Added Ray's response. Total messages: \(messages.count)")
+                
+                // CRITICAL DEBUG: Log conversation state after adding Ray's response
+                let separator = String(repeating: "=", count: 80)
+                print(separator)
+                print("💬 RAY'S RESPONSE ADDED TO CONVERSATION HISTORY")
+                print("💬 Response content: \(response.prefix(100))")
+                print("💬 Total messages in array: \(messages.count)")
+                print("💬 Current conversation state:")
+                for (index, msg) in messages.enumerated() {
+                    let role = msg.isFromUser ? "USER" : "ASSISTANT"
+                    let preview = msg.content.count > 80 ? String(msg.content.prefix(80)) + "..." : msg.content
+                    print("💬   [\(index + 1)] \(role): \(preview)")
+                }
+                print(separator)
+                
                 isProcessing = false
             }
         } catch {
@@ -1242,6 +1281,98 @@ class ChatViewModel: ObservableObject {
         messages = []
         storageService.saveMessages(messages)
         print("🆕 Started new conversation - cleared message history")
+    }
+    
+    // MARK: - Debug Helper Functions
+    
+    /// Debug helper: Simulate a two-message conversation sequence to test memory
+    /// This function simulates:
+    /// 1. User says: "Hi, my name is Keith. I want you to remember that."
+    /// 2. Ray responds: (simulated response)
+    /// 3. User says: "What is my name?"
+    /// Then prints the messages array that would be sent to the API
+    func debugTestConversationMemory() {
+        print("\n" + String(repeating: "=", count: 80))
+        print("🧪 DEBUG TEST: Simulating conversation memory flow")
+        print(String(repeating: "=", count: 80))
+        
+        // Clear existing messages for clean test
+        let originalMessages = messages
+        messages = []
+        
+        // Step 1: User sends first message
+        let firstUserMessage = Message(
+            content: "Hi, my name is Keith. I want you to remember that.",
+            isFromUser: true
+        )
+        messages.append(firstUserMessage)
+        print("\n📝 Step 1: User message added")
+        print("   Content: \"\(firstUserMessage.content)\"")
+        print("   Total messages: \(messages.count)")
+        
+        // Step 2: Simulate Ray's response
+        let rayResponse = Message(
+            content: "Got it, Keith! I'll remember your name.",
+            isFromUser: false
+        )
+        messages.append(rayResponse)
+        print("\n📝 Step 2: Ray's response added")
+        print("   Content: \"\(rayResponse.content)\"")
+        print("   Total messages: \(messages.count)")
+        
+        // Step 3: User sends second message
+        let secondUserMessage = Message(
+            content: "What is my name?",
+            isFromUser: true
+        )
+        messages.append(secondUserMessage)
+        print("\n📝 Step 3: Second user message added")
+        print("   Content: \"\(secondUserMessage.content)\"")
+        print("   Total messages: \(messages.count)")
+        
+        // Step 4: Show what would be sent to API
+        print("\n" + String(repeating: "-", count: 80))
+        print("📤 CONVERSATION HISTORY THAT WOULD BE SENT TO API:")
+        print(String(repeating: "-", count: 80))
+        let conversationHistory: [[String: String]] = messages.map { message in
+            [
+                "role": message.isFromUser ? "user" : "assistant",
+                "content": message.content
+            ]
+        }
+        for (index, msg) in conversationHistory.enumerated() {
+            let role = msg["role"] ?? "unknown"
+            let content = msg["content"] ?? ""
+            print("   [\(index + 1)] \(role.uppercased()): \"\(content)\"")
+        }
+        print(String(repeating: "-", count: 80))
+        
+        // Verify the conversation history contains the first message
+        let containsFirstMessage = conversationHistory.contains { msg in
+            msg["role"] == "user" && msg["content"]?.contains("Keith") == true
+        }
+        print("\n✅ VERIFICATION:")
+        print("   First message (about Keith) is in conversation history: \(containsFirstMessage ? "YES ✅" : "NO ❌")")
+        print("   Total messages in history: \(conversationHistory.count)")
+        print("   Expected: 3 messages (user, assistant, user)")
+        print("   Actual: \(conversationHistory.count) messages")
+        
+        if conversationHistory.count == 3 && containsFirstMessage {
+            print("\n✅ TEST PASSED: Conversation memory is working correctly!")
+        } else {
+            print("\n❌ TEST FAILED: Conversation memory is NOT working correctly!")
+            if conversationHistory.count != 3 {
+                print("   ❌ Expected 3 messages, got \(conversationHistory.count)")
+            }
+            if !containsFirstMessage {
+                print("   ❌ First message about Keith is missing from history")
+            }
+        }
+        
+        print(String(repeating: "=", count: 80) + "\n")
+        
+        // Restore original messages
+        messages = originalMessages
     }
     
     // MARK: - Report Generation Methods (TODO: Implement)
