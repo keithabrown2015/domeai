@@ -106,15 +106,8 @@ class ChatViewModel: ObservableObject {
         }
         
         // RAY'S CONVERSATION MEMORY:
-        // Add user message to the conversation history array
-        // This message will be included in conversationHistory sent to the API
-        // CRITICAL: We append to the existing array, never replace it
-        let userMessage = Message(
-            content: messageContent,
-            isFromUser: true,
-            attachmentData: attachmentData,
-            attachmentType: attachmentType
-        )
+        // CRITICAL: The messages array MUST persist across all requests
+        // We append to the existing array, NEVER replace it
         
         // CRITICAL: Log state BEFORE adding the new message
         print("\n" + String(repeating: "=", count: 80))
@@ -123,16 +116,30 @@ class ChatViewModel: ObservableObject {
         if messages.count > 0 {
             print("🟢 Last message was: \(messages.last?.isFromUser == true ? "USER" : "ASSISTANT")")
             print("🟢 Last message content: \(messages.last?.content.prefix(50) ?? "unknown")")
+            print("🟢 Full messages array BEFORE adding new message:")
+            for (index, msg) in messages.enumerated() {
+                let role = msg.isFromUser ? "USER" : "ASSISTANT"
+                let preview = msg.content.count > 60 ? String(msg.content.prefix(60)) + "..." : msg.content
+                print("🟢   [\(index + 1)] \(role): \"\(preview)\"")
+            }
         }
         
-        // Append the new user message to the existing array
+        // Create the new user message
+        let userMessage = Message(
+            content: messageContent,
+            isFromUser: true,
+            attachmentData: attachmentData,
+            attachmentType: attachmentType
+        )
+        
+        // CRITICAL: Append to existing array (DO NOT replace!)
         messages.append(userMessage)
         
         // CRITICAL DEBUG: Log conversation state after adding user message
         print("🟢 AFTER ADDING USER MESSAGE:")
         print("🟢 New message content: \(messageContent.prefix(100))")
         print("🟢 Total messages in array: \(messages.count)")
-        print("🟢 Full conversation state:")
+        print("🟢 Full conversation state AFTER adding:")
         for (index, msg) in messages.enumerated() {
             let role = msg.isFromUser ? "USER" : "ASSISTANT"
             let preview = msg.content.count > 80 ? String(msg.content.prefix(80)) + "..." : msg.content
@@ -148,17 +155,27 @@ class ChatViewModel: ObservableObject {
         storageService.saveMessages(messages)
         print("💾 Saved \(messages.count) messages to storage")
         
-        print("🟢 About to call processUserMessage with \(messages.count) messages in array...")
+        // CRITICAL: Verify messages array still has all messages before processing
+        print("🟢 VERIFICATION: About to call processUserMessage with \(messages.count) messages in array")
+        if messages.count == 0 {
+            print("❌ CRITICAL ERROR: Messages array is EMPTY before processUserMessage!")
+        } else if messages.count == 1 {
+            print("✅ OK: 1 message (first message of conversation)")
+        } else {
+            print("✅ GOOD: \(messages.count) messages (conversation history is maintained)")
+        }
         
         // Process immediately - this will send full conversation history to API
+        // CRITICAL: Pass the current messages array count for verification
+        let messagesCountBeforeProcessing = messages.count
         Task {
-            await processUserMessage(content: messageContent, attachment: attachmentData)
+            await processUserMessage(content: messageContent, attachment: attachmentData, expectedMessagesCount: messagesCountBeforeProcessing)
         }
     }
     
     // MARK: - AI Processing
     
-    func processUserMessage(content: String, attachment: Data? = nil) async {
+    func processUserMessage(content: String, attachment: Data? = nil, expectedMessagesCount: Int? = nil) async {
         cleanupOldMessages()
         await MainActor.run { isProcessing = true }
         print("💭 Processing: \(content)")
@@ -428,6 +445,29 @@ class ChatViewModel: ObservableObject {
             // CRITICAL: Capture the messages array at this point to ensure we send the full history
             // Access it on MainActor to ensure thread safety
             let messagesToSend = await MainActor.run {
+                // CRITICAL VERIFICATION: Check messages array hasn't been cleared
+                print("\n" + String(repeating: "=", count: 80))
+                print("💬 CAPTURING MESSAGES ARRAY FOR API CALL:")
+                print("💬 Current messages.count: \(messages.count)")
+                if let expected = expectedMessagesCount {
+                    print("💬 Expected messages count: \(expected)")
+                    if messages.count != expected {
+                        print("❌ CRITICAL ERROR: Messages count mismatch!")
+                        print("❌ Expected \(expected), got \(messages.count)")
+                        print("❌ Messages array may have been cleared or modified!")
+                    } else {
+                        print("✅ VERIFIED: Messages count matches expected")
+                    }
+                }
+                
+                // Log full messages array
+                print("💬 Full messages array contents:")
+                for (index, msg) in messages.enumerated() {
+                    let role = msg.isFromUser ? "USER" : "ASSISTANT"
+                    let preview = msg.content.count > 60 ? String(msg.content.prefix(60)) + "..." : msg.content
+                    print("💬   [\(index + 1)] \(role): \"\(preview)\"")
+                }
+                
                 return messages
             }
             
@@ -435,7 +475,7 @@ class ChatViewModel: ObservableObject {
             let separator = String(repeating: "=", count: 80)
             print("\n" + separator)
             print("💬 PREPARING TO SEND CONVERSATION HISTORY TO API")
-            print("💬 Messages array count: \(messagesToSend.count)")
+            print("💬 messagesToSend count: \(messagesToSend.count)")
             print("💬 Conversation history that will be sent:")
             for (index, msg) in messagesToSend.enumerated() {
                 let role = msg.isFromUser ? "user" : "assistant"

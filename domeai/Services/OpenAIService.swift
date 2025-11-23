@@ -67,19 +67,19 @@ class OpenAIService {
         }
         
         // CRITICAL DEBUG LOGGING: Log the full conversation history being sent
-        // This log should match what the backend receives
-        let separator = String(repeating: "=", count: 80)
-        print("\n" + separator)
-        print("📤 iOS IS SENDING conversationHistory WITH \(conversationHistory.count) MESSAGES:")
-        print("📤 Messages array from ChatViewModel: \(messages.count) messages")
+        // This log MUST match what the backend receives
+        print("\n" + String(repeating: "=", count: 80))
+        print("📤 iOS SENDING conversationHistory WITH \(conversationHistory.count) MESSAGES:")
+        print("📤 Input messages array had: \(messages.count) messages")
+        print("📤 After trimming (if needed): \(messagesToInclude.count) messages")
         print(String(repeating: "-", count: 80))
         for (index, msg) in conversationHistory.enumerated() {
-            let role = msg["role"] ?? "unknown"
+            let role = msg["role"] ?? "?"
             let content = msg["content"] ?? ""
-            let preview = content.count > 40 ? String(content.prefix(40)) + "..." : content
+            let preview = content.count > 80 ? String(content.prefix(80)) : content
             print("📤   [\(index + 1)] \(role.uppercased()): \"\(preview)\"")
         }
-        print(separator + "\n")
+        print(String(repeating: "=", count: 80) + "\n")
         
         // VERIFICATION: Ensure conversationHistory has at least the expected number of messages
         // For a conversation with N user messages, we should have at least N messages (user + assistant pairs)
@@ -125,12 +125,22 @@ class OpenAIService {
             }
         }
         
+        // CRITICAL: iOS-side debug log RIGHT BEFORE making the network call
+        // This MUST match what the backend receives
+        print("\n" + String(repeating: "=", count: 80))
+        print("📤 iOS SENDING conversationHistory WITH \(conversationHistory.count) MESSAGES:")
+        for (index, msg) in conversationHistory.enumerated() {
+            let role = msg["role"] as? String ?? "?"
+            let content = msg["content"] as? String ?? ""
+            print("📤   [\(index + 1)] \(role.uppercased()): \"\(content.prefix(80))\"")
+        }
+        print(String(repeating: "=", count: 80) + "\n")
+        
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         
         // Log the actual JSON being sent (for debugging)
         if let bodyString = String(data: request.httpBody ?? Data(), encoding: .utf8) {
-            print("📤 RAY_REQUEST_BODY JSON:")
-            // Print a readable version (first 500 chars to avoid huge logs)
+            print("📤 RAY_REQUEST_BODY JSON (first 500 chars):")
             let preview = bodyString.count > 500 ? String(bodyString.prefix(500)) + "..." : bodyString
             print(preview)
         }
