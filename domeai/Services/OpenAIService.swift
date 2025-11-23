@@ -41,6 +41,9 @@ class OpenAIService {
         // Build conversation history from the messages array (same array used to display messages in UI)
         // This ensures Ray sees the full conversation context, not just the current message
         // Format: OpenAI chat format with "role" (user/assistant) and "content" (message text)
+        
+        // CRITICAL: Ensure we're sending ALL messages, not just recent ones
+        // The messages array should contain the FULL conversation history
         let conversationHistory: [[String: String]] = messages.map { message in
             [
                 "role": message.isFromUser ? "user" : "assistant",
@@ -49,19 +52,30 @@ class OpenAIService {
         }
         
         // CRITICAL DEBUG LOGGING: Log the full conversation history being sent
+        // This log should match what the backend receives
         let separator = String(repeating: "=", count: 80)
-        print(separator)
-        print("📤 OUTGOING OPENAI MESSAGES PAYLOAD:")
-        print("📤 Total messages in conversation history: \(conversationHistory.count)")
+        print("\n" + separator)
+        print("📤 iOS IS SENDING conversationHistory WITH \(conversationHistory.count) MESSAGES:")
         print("📤 Messages array from ChatViewModel: \(messages.count) messages")
         print(String(repeating: "-", count: 80))
         for (index, msg) in conversationHistory.enumerated() {
             let role = msg["role"] ?? "unknown"
             let content = msg["content"] ?? ""
-            let preview = content.count > 100 ? String(content.prefix(100)) + "..." : content
-            print("📤 [\(index + 1)] \(role.uppercased()): \(preview)")
+            let preview = content.count > 40 ? String(content.prefix(40)) + "..." : content
+            print("📤   [\(index + 1)] \(role.uppercased()): \"\(preview)\"")
         }
-        print(separator)
+        print(separator + "\n")
+        
+        // VERIFICATION: Ensure conversationHistory has at least the expected number of messages
+        // For a conversation with N user messages, we should have at least N messages (user + assistant pairs)
+        let userMessageCount = messages.filter { $0.isFromUser }.count
+        let assistantMessageCount = messages.filter { !$0.isFromUser }.count
+        print("📤 VERIFICATION: User messages: \(userMessageCount), Assistant messages: \(assistantMessageCount), Total: \(conversationHistory.count)")
+        
+        if conversationHistory.count < userMessageCount {
+            print("⚠️ WARNING: conversationHistory count (\(conversationHistory.count)) is less than user message count (\(userMessageCount))")
+            print("⚠️ This suggests messages are being lost or filtered!")
+        }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

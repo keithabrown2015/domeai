@@ -408,21 +408,37 @@ class ChatViewModel: ObservableObject {
             // The API will pass this entire conversation history to OpenAI so Ray can see previous messages
             // This is how Ray maintains context across the conversation
             
+            // CRITICAL: Capture the messages array at this point to ensure we send the full history
+            // Make a copy to avoid any potential race conditions
+            let messagesToSend = messages
+            
             // CRITICAL DEBUG: Log what we're about to send BEFORE calling the API
             let separator = String(repeating: "=", count: 80)
-            print(separator)
+            print("\n" + separator)
             print("💬 PREPARING TO SEND CONVERSATION HISTORY TO API")
-            print("💬 Messages array count: \(messages.count)")
+            print("💬 Messages array count: \(messagesToSend.count)")
             print("💬 Conversation history that will be sent:")
-            for (index, msg) in messages.enumerated() {
+            for (index, msg) in messagesToSend.enumerated() {
                 let role = msg.isFromUser ? "user" : "assistant"
                 let preview = msg.content.count > 80 ? String(msg.content.prefix(80)) + "..." : msg.content
-                print("💬   [\(index + 1)] role: \(role), content: \(preview)")
+                print("💬   [\(index + 1)] role: \(role), content: \"\(preview)\"")
             }
-            print(separator)
+            
+            // VERIFICATION: Ensure we're sending the full conversation
+            let userMsgCount = messagesToSend.filter { $0.isFromUser }.count
+            let assistantMsgCount = messagesToSend.filter { !$0.isFromUser }.count
+            print("💬 VERIFICATION: User messages: \(userMsgCount), Assistant messages: \(assistantMsgCount)")
+            
+            if messagesToSend.count == 0 {
+                print("❌ ERROR: Messages array is EMPTY! This should never happen.")
+            } else if messagesToSend.count == 1 && messagesToSend.first?.isFromUser == true {
+                print("⚠️ WARNING: Only 1 user message in array. This might be the first message, or messages were lost.")
+            }
+            
+            print(separator + "\n")
             
             let response = try await OpenAIService.shared.sendChatMessage(
-                messages: messages,  // Full conversation history (user + assistant messages)
+                messages: messagesToSend,  // Full conversation history (user + assistant messages)
                 systemPrompt: raySystemPrompt,
                 model: Config.defaultModel
             )
@@ -1261,17 +1277,22 @@ class ChatViewModel: ObservableObject {
     
     /// Clean up old messages while preserving recent conversation context
     /// Keeps the most recent conversation turns so Ray maintains context
+    /// IMPORTANT: Only trims if we exceed maxConversationMessages (40 messages)
+    /// Never trims if we have fewer than 40 messages - this ensures full conversation history is preserved
     private func cleanupOldMessages() {
         guard messages.count > maxConversationMessages else {
-            return // No cleanup needed
+            // No cleanup needed - keep all messages (important for conversation memory!)
+            return
         }
         
         // Keep the most recent messages (preserves recent conversation turns)
         // This ensures Ray can still see recent context even after trimming
+        // Always keep at least minConversationMessages (10 messages) for continuity
         let messagesToKeep = max(minConversationMessages, maxConversationMessages)
+        let beforeCount = messages.count
         messages = Array(messages.suffix(messagesToKeep))
         
-        print("🧹 Cleaned up old messages. Kept \(messages.count) most recent messages")
+        print("🧹 Cleaned up old messages: \(beforeCount) -> \(messages.count) (kept last \(messagesToKeep) messages)")
         StorageService.shared.saveMessages(messages)
     }
     
