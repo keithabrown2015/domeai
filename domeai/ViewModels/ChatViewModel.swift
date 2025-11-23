@@ -1610,8 +1610,16 @@ class ChatViewModel: ObservableObject {
         memories = storageService.loadMemories()
     }
     
+    /// Load messages from storage
+    /// WARNING: This OVERWRITES the current messages array!
+    /// Only call this when starting a NEW conversation or refreshing from storage
+    /// DO NOT call this during an active conversation as it will lose in-memory messages!
     func loadMessagesFromStorage() {
-        messages = storageService.loadMessages()
+        let loadedMessages = storageService.loadMessages()
+        print("⚠️ loadMessagesFromStorage called - overwriting messages array")
+        print("⚠️ Previous messages count: \(messages.count)")
+        print("⚠️ Loaded messages count: \(loadedMessages.count)")
+        messages = loadedMessages
     }
 
     @MainActor
@@ -1620,8 +1628,14 @@ class ChatViewModel: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         
+        // WARNING: This reloads from storage and OVERWRITES the in-memory messages array
+        // This should only be called when explicitly refreshing, not during active conversation
         let loadedMessages = storageService.loadMessages()
         let loadedMemories = storageService.loadMemories()
+        
+        print("⚠️ refreshData called - reloading from storage")
+        print("⚠️ Previous messages count: \(messages.count)")
+        print("⚠️ Loaded messages count: \(loadedMessages.count)")
         
         messages = loadedMessages
         memories = loadedMemories

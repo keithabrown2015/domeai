@@ -19,6 +19,18 @@ class OpenAIService {
     func sendChatMessage(messages: [Message], systemPrompt: String, model: String = "gpt-4o-mini") async throws -> String {
         print("🎯 Ray: Processing message via smart routing")
         
+        // CRITICAL VERIFICATION: Log what we actually received
+        print("\n" + String(repeating: "=", count: 80))
+        print("📥 OpenAIService.sendChatMessage RECEIVED:")
+        print("📥 messages parameter count: \(messages.count)")
+        print("📥 Full messages array received:")
+        for (index, msg) in messages.enumerated() {
+            let role = msg.isFromUser ? "USER" : "ASSISTANT"
+            let preview = msg.content.count > 60 ? String(msg.content.prefix(60)) + "..." : msg.content
+            print("📥   [\(index + 1)] \(role): \"\(preview)\"")
+        }
+        print(String(repeating: "=", count: 80) + "\n")
+        
         guard let url = URL(string: rayRelayURL) else {
             throw OpenAIServiceError.invalidURL
         }
@@ -42,6 +54,13 @@ class OpenAIService {
         // This ensures Ray sees the full conversation context, not just the current message
         // Format: OpenAI chat format with "role" (user/assistant) and "content" (message text)
         
+        // CRITICAL VERIFICATION: If messages array only has 1 message, something is wrong
+        if messages.count == 1 {
+            print("❌ CRITICAL ERROR: sendChatMessage received only 1 message!")
+            print("❌ This means conversation history was lost before reaching this function!")
+            print("❌ The messages array passed to this function should contain ALL previous messages!")
+        }
+        
         // CRITICAL: Limit history size to avoid memory issues
         // If we have more than 20 messages, trim the oldest ones but keep recent exchanges
         let maxHistoryMessages = 20
@@ -55,6 +74,7 @@ class OpenAIService {
         } else {
             // Include all messages if we're under the limit
             messagesToInclude = messages
+            print("📤 Including ALL \(messages.count) messages (no trimming needed)")
         }
         
         // CRITICAL: Ensure we're sending ALL messages in the trimmed array
