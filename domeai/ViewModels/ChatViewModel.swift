@@ -14,6 +14,15 @@ import Combine
 class ChatViewModel: ObservableObject {
     // MARK: - Published Properties
     
+    /// RAY'S CONVERSATION MEMORY:
+    /// This array stores the complete conversation history (user messages + Ray's responses)
+    /// It is:
+    /// - Loaded from persistent storage on app launch
+    /// - Updated when user sends messages
+    /// - Updated when Ray responds
+    /// - Sent to the API as conversationHistory so Ray can see previous context
+    /// - Persisted to storage after each update
+    /// - Automatically trimmed to keep recent context (last 40 messages)
     @Published var messages: [Message] = []
     @Published var memories: [Memory] = []
     @Published var nudges: [Nudge] = []
@@ -87,7 +96,9 @@ class ChatViewModel: ObservableObject {
             messageContent = content.isEmpty ? "Please analyze this image" : content
         }
         
-        // Create and add user message with attachment
+        // RAY'S CONVERSATION MEMORY:
+        // Add user message to the conversation history array
+        // This message will be included in conversationHistory sent to the API
         let userMessage = Message(
             content: messageContent,
             isFromUser: true,
@@ -96,12 +107,13 @@ class ChatViewModel: ObservableObject {
         )
         messages.append(userMessage)
         
-        print("🟢 User message added to array. Total messages: \(messages.count)")
+        print("🟢 User message added to conversation history. Total messages: \(messages.count)")
         
         // Clear attachment after saving to message
         currentAttachment = nil
         
-        // Save in background, don't wait
+        // Persist conversation history to storage
+        // This ensures conversation persists across app launches
         let messagesToSave = messages
         Task.detached {
             StorageService.shared.saveMessages(messagesToSave)
@@ -109,7 +121,7 @@ class ChatViewModel: ObservableObject {
         
         print("🟢 About to call processUserMessage...")
         
-        // Process immediately
+        // Process immediately - this will send full conversation history to API
         Task {
             await processUserMessage(content: messageContent, attachment: attachmentData)
         }
@@ -379,16 +391,24 @@ class ChatViewModel: ObservableObject {
         """
         
         do {
-            // Send messages array as conversationHistory - backend passes it directly to OpenAI
+            // RAY'S CONVERSATION MEMORY:
+            // Send the full messages array as conversationHistory to the API
+            // The API will pass this entire conversation history to OpenAI so Ray can see previous messages
+            // This is how Ray maintains context across the conversation
+            print("💬 Sending conversation history: \(messages.count) messages")
             let response = try await OpenAIService.shared.sendChatMessage(
-                messages: messages,
+                messages: messages,  // Full conversation history (user + assistant messages)
                 systemPrompt: raySystemPrompt,
                 model: Config.defaultModel
             )
             
+            // Add Ray's response to the conversation history
+            // This ensures the next message includes this response in the context
             await MainActor.run {
-                messages.append(Message(content: response, isFromUser: false))
+                let rayResponse = Message(content: response, isFromUser: false)
+                messages.append(rayResponse)
                 storageService.saveMessages(messages)
+                print("💬 Added Ray's response. Total messages: \(messages.count)")
                 isProcessing = false
             }
         } catch {
@@ -1180,12 +1200,48 @@ class ChatViewModel: ObservableObject {
         return image
     }
     
-    // MARK: - Memory cleanup
+    // MARK: - Conversation Memory Management
+    
+    /// RAY'S CONVERSATION MEMORY:
+    /// The `messages` array stores the full conversation history (user + assistant messages).
+    /// This array is:
+    /// 1. Loaded from persistent storage on app launch (loadMessages())
+    /// 2. Updated when user sends a message (sendMessage())
+    /// 3. Updated when Ray responds (processUserMessage())
+    /// 4. Sent to the API as conversationHistory so Ray can see previous context
+    /// 5. Persisted to storage after each update
+    
+    /// Maximum number of messages to keep in conversation history
+    /// This prevents token limits while maintaining recent context
+    /// Keep last 40 messages = ~20 conversation turns (user + assistant pairs)
+    private let maxConversationMessages = 40
+    
+    /// Minimum messages to keep when trimming (ensures conversation feels continuous)
+    /// Always keep at least the last 10 messages = ~5 conversation turns
+    private let minConversationMessages = 10
+    
+    /// Clean up old messages while preserving recent conversation context
+    /// Keeps the most recent conversation turns so Ray maintains context
     private func cleanupOldMessages() {
-        if messages.count > 50 {
-            messages = Array(messages.suffix(50))
-            StorageService.shared.saveMessages(messages)
+        guard messages.count > maxConversationMessages else {
+            return // No cleanup needed
         }
+        
+        // Keep the most recent messages (preserves recent conversation turns)
+        // This ensures Ray can still see recent context even after trimming
+        let messagesToKeep = max(minConversationMessages, maxConversationMessages)
+        messages = Array(messages.suffix(messagesToKeep))
+        
+        print("🧹 Cleaned up old messages. Kept \(messages.count) most recent messages")
+        StorageService.shared.saveMessages(messages)
+    }
+    
+    /// Start a new conversation by clearing the messages array
+    /// Call this when user explicitly wants to start fresh (e.g., taps "New Chat" button)
+    func startNewConversation() {
+        messages = []
+        storageService.saveMessages(messages)
+        print("🆕 Started new conversation - cleared message history")
     }
     
     // MARK: - Report Generation Methods (TODO: Implement)

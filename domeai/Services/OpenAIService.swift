@@ -37,14 +37,24 @@ class OpenAIService {
             throw OpenAIServiceError.invalidQuery
         }
         
-        // Build conversation history from messages array (same array used to display messages)
+        // RAY'S CONVERSATION MEMORY:
+        // Build conversation history from the messages array (same array used to display messages in UI)
+        // This ensures Ray sees the full conversation context, not just the current message
+        // Format: OpenAI chat format with "role" (user/assistant) and "content" (message text)
         let conversationHistory: [[String: String]] = messages.map { message in
             [
                 "role": message.isFromUser ? "user" : "assistant",
                 "content": message.content
             ]
         }
-        print("📤 Sending \(conversationHistory.count) messages as conversation history")
+        print("📤 Sending \(conversationHistory.count) messages as conversation history to Ray API")
+        print("📤 Conversation history includes: \(conversationHistory.count) total messages")
+        
+        // Log conversation preview for debugging
+        if conversationHistory.count > 0 {
+            let preview = conversationHistory.suffix(3).map { "\($0["role"] ?? "unknown"): \(($0["content"] ?? "").prefix(50))" }
+            print("📤 Last 3 messages: \(preview.joined(separator: " | "))")
+        }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
