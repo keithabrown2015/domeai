@@ -83,21 +83,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const userQuery = query;
     console.log('📥 Request received - Query:', userQuery.substring(0, 100));
 
+    // RAY'S CONVERSATION MEMORY:
     // Use conversation history from request body (sent from frontend)
+    // The frontend sends the FULL conversation history including:
+    // - All previous user messages
+    // - All previous assistant responses
+    // - The current user message (as the last message)
     let messagesArray: any[] = [];
     
-    // DEBUG: Log received conversation history
-    console.log('🔍 DEBUG: Received conversationHistory:', JSON.stringify(conversationHistory, null, 2));
-    console.log('🔍 DEBUG: conversationHistory type:', typeof conversationHistory);
-    console.log('🔍 DEBUG: conversationHistory is array?', Array.isArray(conversationHistory));
-    console.log('🔍 DEBUG: conversationHistory length:', conversationHistory && Array.isArray(conversationHistory) ? conversationHistory.length : 0);
+    // CRITICAL DEBUG: Log what we received from frontend
+    console.log('\n' + '='.repeat(80));
+    console.log('📥 RECEIVED FROM FRONTEND:');
+    console.log('📥 Query:', userQuery);
+    console.log('📥 conversationHistory type:', typeof conversationHistory);
+    console.log('📥 conversationHistory is array?', Array.isArray(conversationHistory));
+    console.log('📥 conversationHistory length:', conversationHistory && Array.isArray(conversationHistory) ? conversationHistory.length : 0);
     
     if (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      // Frontend already includes the current user message as the last message
+      // So we can use the conversationHistory directly
       messagesArray = [...conversationHistory];
-      console.log('📝 Received', messagesArray.length, 'messages in conversation history');
-      console.log('📝 Conversation history preview:', JSON.stringify(messagesArray.slice(0, 3), null, 2));
+      
+      console.log('📥 Received', messagesArray.length, 'messages in conversation history');
+      console.log('📥 Full conversation history:');
+      messagesArray.forEach((msg, idx) => {
+        const role = msg.role || 'unknown';
+        const content = msg.content || '';
+        const preview = content.length > 80 ? content.substring(0, 80) + '...' : content;
+        console.log(`📥   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
+      });
+      
+      // Verify the last message is the current user query
+      const lastMsg = messagesArray[messagesArray.length - 1];
+      if (lastMsg && lastMsg.role === 'user' && lastMsg.content === userQuery) {
+        console.log('✅ Current user query is already in conversation history (as expected)');
+      } else {
+        console.log('⚠️ WARNING: Current user query might not be in conversation history');
+        console.log('⚠️ Last message:', JSON.stringify(lastMsg, null, 2));
+        console.log('⚠️ Current query:', userQuery);
+        // Add it if missing
+        messagesArray.push({
+          role: 'user',
+          content: userQuery
+        });
+        console.log('⚠️ Added current user message. New total:', messagesArray.length);
+      }
     } else {
-      console.log('📝 No conversation history provided, starting new conversation');
+      console.log('⚠️ No conversation history provided, starting new conversation');
       // Fallback: create array with just current query
       messagesArray = [{
         role: 'user',
@@ -105,25 +137,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }];
     }
 
-    // Add current user message if not already included
-    const lastMessage = messagesArray[messagesArray.length - 1];
-    const currentQueryInHistory = lastMessage && 
-      lastMessage.role === 'user' && 
-      lastMessage.content === userQuery;
-    
-    if (!currentQueryInHistory) {
-      messagesArray.push({
-        role: 'user',
-        content: userQuery
-      });
-      console.log('📝 Added current user message. Total messages:', messagesArray.length);
-    } else {
-      console.log('📝 Current query already in conversation history');
-    }
-
-    // CRITICAL: Verify messagesArray has conversation history
-    console.log('🔍 DEBUG: Final messagesArray length:', messagesArray.length);
-    console.log('🔍 DEBUG: Final messagesArray:', JSON.stringify(messagesArray, null, 2));
+    // CRITICAL: Final verification before processing
+    console.log('\n' + '-'.repeat(80));
+    console.log('📋 FINAL MESSAGES ARRAY (will be sent to OpenAI):');
+    console.log('📋 Total messages:', messagesArray.length);
+    messagesArray.forEach((msg, idx) => {
+      const role = msg.role || 'unknown';
+      const content = msg.content || '';
+      const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
+      console.log(`📋   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
+    });
+    console.log('='.repeat(80) + '\n');
 
     // Check for OpenAI API key
     const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -234,18 +258,18 @@ You have access to the full conversation history below. Use it to maintain conte
         ...messagesArray  // Full conversation history from frontend
       ];
 
-      console.log('🤖 Tier 1 - Sending', tier1Messages.length, 'messages to OpenAI');
-      // CRITICAL: Verify conversation history is included
-      console.log('🔍 DEBUG: Tier 1 messagesArray length:', messagesArray.length);
-      console.log('🔍 DEBUG: Tier 1 messagesArray:', JSON.stringify(messagesArray, null, 2));
-      console.log('🔍 DEBUG: Tier 1 tier1Messages length:', tier1Messages.length);
-      // DEBUG: Log messages array being sent to OpenAI
-      console.log('🔍 DEBUG: Sending to OpenAI messages array:', JSON.stringify(tier1Messages, null, 2));
-      console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(tier1Messages, null, 2));
-      
       // CRITICAL: Log exactly what's being sent to OpenAI
-      console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(tier1Messages, null, 2));
-      console.log('🚀 Number of messages:', tier1Messages?.length || 0);
+      console.log('\n' + '='.repeat(80));
+      console.log('🚀 SENDING TO OPENAI (TIER 1):');
+      console.log('🚀 Total messages:', tier1Messages.length);
+      console.log('🚀 Messages array:');
+      tier1Messages.forEach((msg, idx) => {
+        const role = msg.role || 'unknown';
+        const content = msg.content || '';
+        const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
+        console.log(`🚀   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
+      });
+      console.log('='.repeat(80) + '\n');
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -292,18 +316,18 @@ You have access to the full conversation history below. Use it to maintain conte
         ...messagesArray  // Full conversation history from frontend
       ];
 
-      console.log('🤖 Tier 2 - Sending', tier2Messages.length, 'messages to OpenAI');
-      // CRITICAL: Verify conversation history is included
-      console.log('🔍 DEBUG: Tier 2 messagesArray length:', messagesArray.length);
-      console.log('🔍 DEBUG: Tier 2 messagesArray:', JSON.stringify(messagesArray, null, 2));
-      console.log('🔍 DEBUG: Tier 2 tier2Messages length:', tier2Messages.length);
-      // DEBUG: Log messages array being sent to OpenAI
-      console.log('🔍 DEBUG: Sending to OpenAI messages array:', JSON.stringify(tier2Messages, null, 2));
-      console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(tier2Messages, null, 2));
-      
       // CRITICAL: Log exactly what's being sent to OpenAI
-      console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(tier2Messages, null, 2));
-      console.log('🚀 Number of messages:', tier2Messages?.length || 0);
+      console.log('\n' + '='.repeat(80));
+      console.log('🚀 SENDING TO OPENAI (TIER 2):');
+      console.log('🚀 Total messages:', tier2Messages.length);
+      console.log('🚀 Messages array:');
+      tier2Messages.forEach((msg, idx) => {
+        const role = msg.role || 'unknown';
+        const content = msg.content || '';
+        const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
+        console.log(`🚀   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
+      });
+      console.log('='.repeat(80) + '\n');
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -540,18 +564,18 @@ You have access to the full conversation history below. Use it to maintain conte
             ...messagesArray  // Full conversation history from frontend
           ];
 
-          console.log('🔍 Tier 3 - Sending', tier3Messages.length, 'messages to OpenAI for synthesis');
-          // CRITICAL: Verify conversation history is included
-          console.log('🔍 DEBUG: Tier 3 messagesArray length:', messagesArray.length);
-          console.log('🔍 DEBUG: Tier 3 messagesArray:', JSON.stringify(messagesArray, null, 2));
-          console.log('🔍 DEBUG: Tier 3 tier3Messages length:', tier3Messages.length);
-          // DEBUG: Log messages array being sent to OpenAI
-          console.log('🔍 DEBUG: Sending to OpenAI messages array:', JSON.stringify(tier3Messages, null, 2));
-          console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(tier3Messages, null, 2));
-          
           // CRITICAL: Log exactly what's being sent to OpenAI
-          console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(tier3Messages, null, 2));
-          console.log('🚀 Number of messages:', tier3Messages?.length || 0);
+          console.log('\n' + '='.repeat(80));
+          console.log('🚀 SENDING TO OPENAI (TIER 3 SYNTHESIS):');
+          console.log('🚀 Total messages:', tier3Messages.length);
+          console.log('🚀 Messages array:');
+          tier3Messages.forEach((msg, idx) => {
+            const role = msg.role || 'unknown';
+            const content = msg.content || '';
+            const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
+            console.log(`🚀   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
+          });
+          console.log('='.repeat(80) + '\n');
 
           const summaryResponse = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
