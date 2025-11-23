@@ -448,15 +448,45 @@ class ChatViewModel: ObservableObject {
             let assistantMsgCount = messagesToSend.filter { !$0.isFromUser }.count
             print("💬 VERIFICATION: User messages: \(userMsgCount), Assistant messages: \(assistantMsgCount)")
             
+            // CRITICAL VERIFICATION: For the second message and beyond, we should have:
+            // - At least 2 messages (first user + first assistant)
+            // - The last message should be a user message (the current one)
+            // - If we have 3+ messages, the pattern should be: user, assistant, user (or more)
             if messagesToSend.count == 0 {
                 print("❌ ERROR: Messages array is EMPTY! This should never happen.")
                 print("❌ This means conversation history was lost. Check if messages array is being cleared.")
-            } else if messagesToSend.count == 1 && messagesToSend.first?.isFromUser == true {
-                print("⚠️ WARNING: Only 1 user message in array.")
-                print("⚠️ This should only happen on the FIRST message of a conversation.")
-                print("⚠️ If this is NOT the first message, messages were lost!")
+            } else if messagesToSend.count == 1 {
+                if messagesToSend.first?.isFromUser == true {
+                    print("✅ OK: Only 1 user message - this is the FIRST message of the conversation")
+                } else {
+                    print("❌ ERROR: Only 1 message and it's not from user!")
+                }
             } else if messagesToSend.count >= 2 {
+                // Verify the pattern: should alternate or end with user message
+                let lastMsg = messagesToSend.last
+                let firstMsg = messagesToSend.first
+                
                 print("✅ GOOD: Multiple messages in array - conversation history is being maintained")
+                
+                // For second message: should have [user1, assistant1, user2]
+                if messagesToSend.count == 3 {
+                    let expectedPattern = messagesToSend[0].isFromUser && 
+                                         !messagesToSend[1].isFromUser && 
+                                         messagesToSend[2].isFromUser
+                    if expectedPattern {
+                        print("✅ PERFECT: Expected pattern for second message: [user, assistant, user]")
+                    } else {
+                        print("⚠️ WARNING: Pattern doesn't match expected [user, assistant, user]")
+                        print("⚠️ Actual pattern: [\(messagesToSend[0].isFromUser ? "user" : "assistant"), \(messagesToSend[1].isFromUser ? "user" : "assistant"), \(messagesToSend[2].isFromUser ? "user" : "assistant")]")
+                    }
+                }
+                
+                // Verify last message is from user (current message)
+                if lastMsg?.isFromUser == true {
+                    print("✅ VERIFIED: Last message is from user (current message)")
+                } else {
+                    print("⚠️ WARNING: Last message is NOT from user - this might be an issue")
+                }
             }
             
             print(separator + "\n")

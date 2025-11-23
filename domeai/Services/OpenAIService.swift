@@ -109,10 +109,30 @@ class OpenAIService {
             "conversationHistory": conversationHistory
         ]
         
+        // CRITICAL VERIFICATION: Ensure conversationHistory contains all expected messages
+        // For second message, we should have: [user1, assistant1, user2]
+        print("📤 FINAL VERIFICATION BEFORE SENDING:")
+        print("📤 conversationHistory count: \(conversationHistory.count)")
+        print("📤 Expected for second message: 3 messages [user, assistant, user]")
+        if conversationHistory.count == 3 {
+            let msg1Role = conversationHistory[0]["role"] ?? "unknown"
+            let msg2Role = conversationHistory[1]["role"] ?? "unknown"
+            let msg3Role = conversationHistory[2]["role"] ?? "unknown"
+            if msg1Role == "user" && msg2Role == "assistant" && msg3Role == "user" {
+                print("✅ PERFECT: conversationHistory has correct pattern [user, assistant, user]")
+            } else {
+                print("⚠️ WARNING: conversationHistory pattern is [\(msg1Role), \(msg2Role), \(msg3Role)]")
+            }
+        }
+        
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         
+        // Log the actual JSON being sent (for debugging)
         if let bodyString = String(data: request.httpBody ?? Data(), encoding: .utf8) {
-            print("RAY_REQUEST_BODY =", bodyString)
+            print("📤 RAY_REQUEST_BODY JSON:")
+            // Print a readable version (first 500 chars to avoid huge logs)
+            let preview = bodyString.count > 500 ? String(bodyString.prefix(500)) + "..." : bodyString
+            print(preview)
         }
         
         print("🎯 Sending request to Ray relay...")
