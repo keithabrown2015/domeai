@@ -54,6 +54,79 @@ class GoogleSearchService {
     
     private init() {}
     
+    // MARK: - Search with Ray Response
+    
+    func searchWithResponse(query: String) async throws -> (message: String, sources: [String], searchPerformed: Bool) {
+        print("🔍🔍🔍 GoogleSearchService.searchWithResponse() via Vercel relay 🔍🔍🔍")
+        print("🔍 Query: '\(query)'")
+        
+        guard let url = URL(string: searchURL) else {
+            print("🔴 Failed to build URL")
+            throw GoogleSearchServiceError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "X-App-Token")
+        
+        let body: [String: Any] = [
+            "query": query,
+            "num": "10"
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        print("DomeAI request URL: \(url.absoluteString)")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            print("🔴 Invalid response type")
+            throw GoogleSearchServiceError.invalidResponse
+        }
+        
+        print("🔍 HTTP Status: \(httpResponse.statusCode)")
+        
+        if httpResponse.statusCode != 200 {
+            let errorString = String(data: data, encoding: .utf8) ?? "No error details"
+            print("🔴 Search Relay Error - Status: \(httpResponse.statusCode)")
+            print("🔴 Error Response: \(errorString)")
+            print("🔴 Request URL: \(url.absoluteString)")
+            throw GoogleSearchServiceError.httpError(httpResponse.statusCode)
+        }
+        
+        // Parse new response format
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let json = json else {
+            print("🔴 JSON is nil")
+            throw GoogleSearchServiceError.invalidResponse
+        }
+        
+        print("🔍 JSON keys: \(Array(json.keys))")
+        
+        // Check for new response format
+        guard let ok = json["ok"] as? Bool, ok else {
+            print("🔴 Response indicates error or invalid format")
+            throw GoogleSearchServiceError.invalidResponse
+        }
+        
+        // Extract Ray's message (prefer "reply" over "message")
+        let message = (json["reply"] as? String) ?? (json["message"] as? String) ?? ""
+        let sources = (json["sources"] as? [String]) ?? []
+        let searchPerformed = (json["searchPerformed"] as? Bool) ?? false
+        
+        if message.isEmpty {
+            print("🔴 No message or reply in response")
+            throw GoogleSearchServiceError.invalidResponse
+        }
+        
+        print("✅ Ray's response extracted (\(message.count) characters)")
+        print("🔍 Search performed: \(searchPerformed), Sources: \(sources.count)")
+        
+        return (message: message, sources: sources, searchPerformed: searchPerformed)
+    }
+    
     func search(query: String) async throws -> [SearchResult] {
         print("🔍🔍🔍 GoogleSearchService.search() via Vercel relay 🔍🔍🔍")
         print("🔍 Query: '\(query)'")
@@ -95,28 +168,48 @@ class GoogleSearchService {
             throw GoogleSearchServiceError.httpError(httpResponse.statusCode)
         }
         
-        // Parse response - EXACT SAME AS BEFORE
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let json = json {
-            print("🔍 JSON keys: \(Array(json.keys))")
-        } else {
+        // Parse new response format
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             print("🔍 JSON is nil")
+            throw GoogleSearchServiceError.invalidResponse
         }
         
-        guard let items = json?["items"] as? [[String: Any]] else {
-            print("🔴 No 'items' in response")
-            return []
+        print("🔍 JSON keys: \(Array(json.keys))")
+        
+        // Check for new response format
+        guard let ok = json["ok"] as? Bool, ok else {
+            print("🔴 Response indicates error or invalid format")
+            throw GoogleSearchServiceError.invalidResponse
         }
         
-        print("🔍 Found \(items.count) items")
-        
-        let results = items.compactMap { item -> SearchResult? in
-            guard let title = item["title"] as? String,
-                  let snippet = item["snippet"] as? String,
-                  let link = item["link"] as? String else {
-                return nil
+        // Extract sources from the new format
+        var results: [SearchResult] = []
+        if let sources = json["sources"] as? [String] {
+            print("🔍 Found \(sources.count) sources")
+            results = sources.compactMap { url -> SearchResult? in
+                // Extract domain name for title
+                let title = URL(string: url)?.host ?? "Source"
+                return SearchResult(
+                    title: title,
+                    snippet: url,
+                    link: url
+                )
             }
-            return SearchResult(title: title, snippet: snippet, link: link)
+        } else {
+            // Fallback: try old format with "items" array
+            if let items = json["items"] as? [[String: Any]] {
+                print("🔍 Found \(items.count) items (legacy format)")
+                results = items.compactMap { item -> SearchResult? in
+                    guard let title = item["title"] as? String,
+                          let snippet = item["snippet"] as? String,
+                          let link = item["link"] as? String else {
+                        return nil
+                    }
+                    return SearchResult(title: title, snippet: snippet, link: link)
+                }
+            } else {
+                print("⚠️ No sources or items found in response")
+            }
         }
         
         print("🔍 Returning \(results.count) results")

@@ -16,31 +16,114 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
+  // Helper function to extract content from OpenAI response
+  const extractContent = (responseData: any): string => {
+    const choice = responseData.choices?.[0];
+    if (!choice) {
+      console.error('❌ No choices found in OpenAI response');
+      return '';
+    }
+
+    const messageContent = choice.message?.content;
+    if (!messageContent) {
+      console.error('❌ No content found in OpenAI response message');
+      return '';
+    }
+
+    // Handle string content
+    if (typeof messageContent === 'string') {
+      return messageContent;
+    }
+
+    // Handle array content (multimodal responses)
+    if (Array.isArray(messageContent)) {
+      const textBlocks = messageContent
+        .filter((block: any) => block.type === 'text' && block.text)
+        .map((block: any) => block.text)
+        .join(' ');
+      
+      if (textBlocks) {
+        return textBlocks;
+      }
+      
+      // Fallback: try to extract any string values
+      const allText = messageContent
+        .map((block: any) => {
+          if (typeof block === 'string') return block;
+          if (block.text) return block.text;
+          if (block.content) return block.content;
+          return '';
+        })
+        .filter(Boolean)
+        .join(' ');
+      
+      return allText;
+    }
+
+    console.error('❌ Unknown content format:', typeof messageContent);
+    return '';
+  };
+
   try {
+    // CRITICAL: Log what we received from iOS app
+    console.log('📥 RECEIVED conversationHistory:', JSON.stringify(req.body.conversationHistory || [], null, 2));
+    console.log('📥 RECEIVED query:', req.body.query);
+    console.log('📥 RECEIVED full body:', JSON.stringify(req.body, null, 2));
+    
     // Parse request body
     const { query, conversationHistory } = req.body;
-    
-    // Extract user query
-    const userQuery = query || (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0
-      ? conversationHistory[conversationHistory.length - 1]?.content
-      : null);
 
-    if (!userQuery || typeof userQuery !== 'string') {
+    if (!query || typeof query !== 'string') {
       return res.status(400).json({ 
         error: 'Bad request', 
         message: 'Missing or invalid "query" field in request body' 
       });
     }
 
-    // Use conversationHistory if provided, otherwise create from query
-    const messagesArray = conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0
-      ? conversationHistory
-      : [
-          {
-            role: 'user',
-            content: userQuery
-          }
-        ];
+    const userQuery = query;
+    console.log('📥 Request received - Query:', userQuery.substring(0, 100));
+
+    // Use conversation history from request body (sent from frontend)
+    let messagesArray: any[] = [];
+    
+    // DEBUG: Log received conversation history
+    console.log('🔍 DEBUG: Received conversationHistory:', JSON.stringify(conversationHistory, null, 2));
+    console.log('🔍 DEBUG: conversationHistory type:', typeof conversationHistory);
+    console.log('🔍 DEBUG: conversationHistory is array?', Array.isArray(conversationHistory));
+    console.log('🔍 DEBUG: conversationHistory length:', conversationHistory && Array.isArray(conversationHistory) ? conversationHistory.length : 0);
+    
+    if (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      messagesArray = [...conversationHistory];
+      console.log('📝 Received', messagesArray.length, 'messages in conversation history');
+      console.log('📝 Conversation history preview:', JSON.stringify(messagesArray.slice(0, 3), null, 2));
+    } else {
+      console.log('📝 No conversation history provided, starting new conversation');
+      // Fallback: create array with just current query
+      messagesArray = [{
+        role: 'user',
+        content: userQuery
+      }];
+    }
+
+    // Add current user message if not already included
+    const lastMessage = messagesArray[messagesArray.length - 1];
+    const currentQueryInHistory = lastMessage && 
+      lastMessage.role === 'user' && 
+      lastMessage.content === userQuery;
+    
+    if (!currentQueryInHistory) {
+      messagesArray.push({
+        role: 'user',
+        content: userQuery
+      });
+      console.log('📝 Added current user message. Total messages:', messagesArray.length);
+    } else {
+      console.log('📝 Current query already in conversation history');
+    }
+
+    // CRITICAL: Verify messagesArray has conversation history
+    console.log('🔍 DEBUG: Final messagesArray length:', messagesArray.length);
+    console.log('🔍 DEBUG: Final messagesArray:', JSON.stringify(messagesArray, null, 2));
 
     // Check for OpenAI API key
     const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -75,7 +158,7 @@ TIER 1 (gpt-4o-mini): Simple questions, chitchat, basic info, general knowledge,
 
 TIER 2 (gpt-4o): Complex reasoning, coding help, architecture design, multi-step planning, deep analysis, problem-solving, creative writing, technical explanations
 
-TIER 3 (Google Search + gpt-4o-mini): Current events, news, live data, "today/recent/current/latest", population stats, weather, stocks, sports scores, "is X down", real-time information, recent happenings
+TIER 3 (Google Search + gpt-4o): Current events, news, live data, "today/recent/current/latest", population stats, weather, stocks, sports scores, "is X down", real-time information, recent happenings
 
 Be decisive and choose the most appropriate tier.`
           },
@@ -101,7 +184,7 @@ Be decisive and choose the most appropriate tier.`
     }
 
     const classificationData = await classificationResponse.json();
-    const classificationText = classificationData.choices?.[0]?.message?.content;
+    const classificationText = extractContent(classificationData);
     
     if (!classificationText) {
       console.error('❌ No content in tier classification response');
@@ -125,15 +208,44 @@ Be decisive and choose the most appropriate tier.`
 
     console.log(`🎯 Tier selected: ${tier} - ${reasoning}`);
 
+    // Initialize response variables
+    const requestId = Date.now().toString() + '-' + Math.random().toString(36).substring(7);
+    console.log('🎯 Request ID:', requestId);
+    
     let message = '';
     let model = '';
     let sources: string[] = [];
-
+    
     // TIER 1: Simple queries with gpt-4o-mini
     if (tier === 1) {
       console.log('🤖 Tier 1: Using gpt-4o-mini');
+      sources = [];
       model = 'gpt-4o-mini';
       
+      const tier1Messages = [
+        {
+          role: 'system',
+          content: `You are Ray, a sharp, friendly AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
+
+Be conversational, helpful, and efficient. Answer in 2-3 sentences unless more detail is needed. Use natural language, not robotic responses.
+
+You have access to the full conversation history below. Use it to maintain context and answer questions that reference previous messages.`
+        },
+        ...messagesArray  // Full conversation history from frontend
+      ];
+
+      console.log('🤖 Tier 1 - Sending', tier1Messages.length, 'messages to OpenAI');
+      // CRITICAL: Verify conversation history is included
+      console.log('🔍 DEBUG: Tier 1 messagesArray length:', messagesArray.length);
+      console.log('🔍 DEBUG: Tier 1 messagesArray:', JSON.stringify(messagesArray, null, 2));
+      console.log('🔍 DEBUG: Tier 1 tier1Messages length:', tier1Messages.length);
+      // DEBUG: Log messages array being sent to OpenAI
+      console.log('🔍 DEBUG: Sending to OpenAI messages array:', JSON.stringify(tier1Messages, null, 2));
+      console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(tier1Messages, null, 2));
+      
+      // CRITICAL: Log exactly what's being sent to OpenAI
+      console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(tier1Messages, null, 2));
+      console.log('🚀 Number of messages:', tier1Messages?.length || 0);
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -143,53 +255,7 @@ Be decisive and choose the most appropriate tier.`
         },
         body: JSON.stringify({
           model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: `You are Ray, a sharp, friendly AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
-
-DOME FILING SYSTEM:
-
-- Projects: User-created containers (examples: School, Home, Car, Church, Recipes, Business)
-
-- Tags: Optional labels that span across projects
-
-- Saved Items: Content with title, text, timestamp, project, and optional tags
-
-SAVING BEHAVIOR:
-
-When user says "save this", "put in Dome", "keep this", or "save under [Project]":
-
-1. Determine the correct Project (ask if unclear)
-
-2. Suggest creating a new Project if none fits
-
-3. Apply tags if mentioned
-
-4. Generate a clear title
-
-5. Confirm the save
-
-RETRIEVAL BEHAVIOR:
-
-Respond to requests like:
-
-- "Show me everything about [topic]"
-
-- "Open my [project] project"
-
-- "What did I save about [X]?"
-
-- "Show everything under [Project]"
-
-TONE:
-
-Be conversational, helpful, and efficient. Answer in 2-3 sentences unless more detail is needed. Use natural language, not robotic responses.
-
-IMPORTANT: You cannot actually save or retrieve yet (the Dome UI is being built), but you should respond AS IF you can, and tell users "I'll save that to your Dome once the filing system is ready."`
-            },
-            ...messagesArray
-          ],
+          messages: tier1Messages,  // This includes system prompt + full conversation history
           temperature: 0.7,
           max_tokens: 1000
         })
@@ -201,20 +267,43 @@ IMPORTANT: You cannot actually save or retrieve yet (the Dome UI is being built)
         throw new Error(`OpenAI API error: ${response.status}`);
       }
 
-      const data = await response.json();
-      message = data.choices?.[0]?.message?.content || '';
-      
-      if (!message) {
-        throw new Error('No content returned from OpenAI');
-      }
-
+      const responseData = await response.json();
+      message = extractContent(responseData);
       console.log('✅ Tier 1 response generated');
+      console.log('🔍 DEBUG: OpenAI response received');
     }
     // TIER 2: Complex queries with gpt-4o
     else if (tier === 2) {
       console.log('🤖 Tier 2: Using gpt-4o');
+      sources = [];
       model = 'gpt-4o';
       
+      const tier2Messages = [
+        {
+          role: 'system',
+          content: `You are Ray, a sharp, friendly AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
+
+You excel at complex reasoning, coding, architecture, multi-step planning, and deep analysis. Provide thorough, well-reasoned responses.
+
+Be conversational, helpful, and efficient. Provide detailed, thoughtful answers when needed. Use natural language, not robotic responses.
+
+You have access to the full conversation history below. Use it to maintain context and answer questions that reference previous messages.`
+        },
+        ...messagesArray  // Full conversation history from frontend
+      ];
+
+      console.log('🤖 Tier 2 - Sending', tier2Messages.length, 'messages to OpenAI');
+      // CRITICAL: Verify conversation history is included
+      console.log('🔍 DEBUG: Tier 2 messagesArray length:', messagesArray.length);
+      console.log('🔍 DEBUG: Tier 2 messagesArray:', JSON.stringify(messagesArray, null, 2));
+      console.log('🔍 DEBUG: Tier 2 tier2Messages length:', tier2Messages.length);
+      // DEBUG: Log messages array being sent to OpenAI
+      console.log('🔍 DEBUG: Sending to OpenAI messages array:', JSON.stringify(tier2Messages, null, 2));
+      console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(tier2Messages, null, 2));
+      
+      // CRITICAL: Log exactly what's being sent to OpenAI
+      console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(tier2Messages, null, 2));
+      console.log('🚀 Number of messages:', tier2Messages?.length || 0);
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -224,27 +313,7 @@ IMPORTANT: You cannot actually save or retrieve yet (the Dome UI is being built)
         },
         body: JSON.stringify({
           model: 'gpt-4o',
-          messages: [
-            {
-              role: 'system',
-              content: `You are Ray, a sharp, friendly AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
-
-You excel at complex reasoning, coding, architecture, multi-step planning, and deep analysis. Provide thorough, well-reasoned responses.
-
-DOME FILING SYSTEM:
-
-- Projects: User-created containers (examples: School, Home, Car, Church, Recipes, Business)
-
-- Tags: Optional labels that span across projects
-
-- Saved Items: Content with title, text, timestamp, project, and optional tags
-
-TONE:
-
-Be conversational, helpful, and efficient. Provide detailed, thoughtful answers when needed. Use natural language, not robotic responses.`
-            },
-            ...messagesArray
-          ],
+          messages: tier2Messages,
           temperature: 0.7,
           max_tokens: 2000
         })
@@ -256,33 +325,50 @@ Be conversational, helpful, and efficient. Provide detailed, thoughtful answers 
         throw new Error(`OpenAI API error: ${response.status}`);
       }
 
-      const data = await response.json();
-      message = data.choices?.[0]?.message?.content || '';
-      
-      if (!message) {
-        throw new Error('No content returned from OpenAI');
-      }
-
+      const responseData = await response.json();
+      message = extractContent(responseData);
       console.log('✅ Tier 2 response generated');
+      console.log('🔍 DEBUG: OpenAI response received');
     }
-    // TIER 3: Google Search + gpt-4o-mini summary
+    // TIER 3: Google Search + gpt-4o summary
     else if (tier === 3) {
-      console.log('🔍 Tier 3: Using Google Search + gpt-4o-mini');
+      console.log('🔍 Tier 3: Using Google Search + gpt-4o');
       model = 'google-search';
       
       const googleApiKey = process.env.GOOGLE_API_KEY;
       const googleCx = process.env.GOOGLE_CX;
-
+      
       if (!googleApiKey || !googleCx) {
         console.error('❌ Google API credentials not found, falling back to Tier 2');
+        sources = [];
         // Fallback to Tier 2
         model = 'gpt-4o';
-        const messagesArray = messages && Array.isArray(messages) ? messages : [
+        const fallbackMessagesArray = messagesArray.length > 0 ? messagesArray : [
           {
             role: 'user',
             content: `${userQuery}\n\nNote: I wanted to search for current information, but search is unavailable. Answering from my knowledge instead.`
           }
         ];
+
+        const fallbackTier2Messages = [
+          {
+            role: 'system',
+            content: `You are Ray. Answer the query, noting that you cannot access current/recent information right now.`
+          },
+          ...fallbackMessagesArray
+        ];
+
+        // CRITICAL: Verify conversation history is included in fallback
+        console.log('🔍 DEBUG: Tier 3 fallback messagesArray length:', messagesArray.length);
+        console.log('🔍 DEBUG: Tier 3 fallback messagesArray:', JSON.stringify(messagesArray, null, 2));
+        console.log('🔍 DEBUG: Tier 3 fallback fallbackTier2Messages length:', fallbackTier2Messages.length);
+        // DEBUG: Log messages array being sent to OpenAI (fallback)
+        console.log('🔍 DEBUG: Sending to OpenAI messages array (Tier 3 fallback):', JSON.stringify(fallbackTier2Messages, null, 2));
+        console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(fallbackTier2Messages, null, 2));
+        
+        // CRITICAL: Log exactly what's being sent to OpenAI
+        console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(fallbackTier2Messages, null, 2));
+        console.log('🚀 Number of messages:', fallbackTier2Messages?.length || 0);
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
@@ -292,15 +378,9 @@ Be conversational, helpful, and efficient. Provide detailed, thoughtful answers 
           },
           body: JSON.stringify({
             model: 'gpt-4o',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are Ray. Answer the query, noting that you cannot access current/recent information right now.'
-              },
-              ...messagesArray
-            ],
+            messages: fallbackTier2Messages,
             temperature: 0.7,
-            max_tokens: 1000
+            max_tokens: 2000
           })
         });
 
@@ -310,19 +390,13 @@ Be conversational, helpful, and efficient. Provide detailed, thoughtful answers 
           throw new Error(`OpenAI API error: ${response.status}`);
         }
 
-        const data = await response.json();
-        message = data.choices?.[0]?.message?.content || '';
-        
-        if (!message) {
-          throw new Error('No content returned from OpenAI');
-        }
-
+        const responseData = await response.json();
+        message = extractContent(responseData);
         console.log('✅ Tier 2 fallback response generated');
+        console.log('🔍 DEBUG: OpenAI response received');
       } else {
         // STEP 1: Optimize search query
         console.log('🔍 Optimizing search query...');
-        console.log('🔍 Original query:', userQuery);
-        
         const queryOptimizerResponse = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -337,14 +411,12 @@ Be conversational, helpful, and efficient. Provide detailed, thoughtful answers 
                 content: `The user asked: ${userQuery}
 
 Generate the best Google search query to find current, accurate information to answer this question.
-
 Rules:
 - Remove question words (what, how, when, who)
 - Keep only essential keywords
 - Add year/month if query is time-sensitive (use 2025, November 2025)
 - Make it search-engine friendly
 - Maximum 10 words
-
 Respond with ONLY the search query, nothing else.`
               }
             ],
@@ -353,46 +425,66 @@ Respond with ONLY the search query, nothing else.`
           })
         });
 
-        let optimizedQuery = userQuery; // Fallback to original if optimization fails
-        
-        if (queryOptimizerResponse.ok) {
-          const optimizerData = await queryOptimizerResponse.json();
-          const optimizedText = optimizerData.choices?.[0]?.message?.content?.trim();
-          
-          if (optimizedText) {
-            optimizedQuery = optimizedText;
-            console.log('✅ Optimized query:', optimizedQuery);
-          } else {
-            console.log('⚠️ No optimized query returned, using original');
-          }
-        } else {
-          console.log('⚠️ Query optimization failed, using original query');
+        if (!queryOptimizerResponse.ok) {
+          console.error('❌ Query optimizer error, using original query');
         }
-        
-        // STEP 2: Perform Google Search with optimized query
-        console.log('🌐 Calling Google Custom Search API...');
-        console.log('🔍 Using search query:', optimizedQuery);
-        
-        const googleSearchUrl = new URL('https://www.googleapis.com/customsearch/v1');
-        googleSearchUrl.searchParams.set('key', googleApiKey);
-        googleSearchUrl.searchParams.set('cx', googleCx);
-        googleSearchUrl.searchParams.set('q', optimizedQuery);
-        googleSearchUrl.searchParams.set('num', '3');
 
-        const googleResponse = await fetch(googleSearchUrl.toString());
+        const optimizerData = await queryOptimizerResponse.json();
+        const optimizedQuery = extractContent(optimizerData).trim() || userQuery;
+        console.log('🔍 Original query:', userQuery);
+        console.log('🔍 Optimized query:', optimizedQuery);
 
-        if (!googleResponse.ok) {
-          const errorText = await googleResponse.text();
-          console.error('❌ Google Search API error:', googleResponse.status, errorText);
-          // Fallback to Tier 2
-          console.log('⚠️ Falling back to Tier 2 due to Google Search error');
+        // STEP 2: Google Custom Search
+        console.log('🔍 Calling Google Custom Search API...');
+        const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${googleApiKey}&cx=${googleCx}&q=${encodeURIComponent(optimizedQuery)}`;
+        
+        let searchResults: any[] = [];
+        try {
+          const searchResponse = await fetch(searchUrl);
+          if (searchResponse.ok) {
+            const searchData = await searchResponse.json();
+            searchResults = (searchData.items || []).slice(0, 3);
+            console.log('🔍 Search results:', searchResults.length);
+            
+            // Extract sources
+            sources = searchResults.map((r: any) => r.link).filter(Boolean);
+          } else {
+            console.error('❌ Google Search API error:', searchResponse.status);
+          }
+        } catch (searchError) {
+          console.error('❌ Google Search error:', searchError);
+        }
+
+        if (searchResults.length === 0) {
+          console.log('⚠️ No search results, falling back to Tier 2');
+          sources = [];
           model = 'gpt-4o';
-          const messagesArray = messages && Array.isArray(messages) ? messages : [
+          const fallbackMessagesArray = messagesArray.length > 0 ? messagesArray : [
             {
               role: 'user',
               content: `${userQuery}\n\nNote: Search failed, answering from my knowledge instead.`
             }
           ];
+
+          const fallbackTier2MessagesNoSearch = [
+            {
+              role: 'system',
+              content: `You are Ray. Answer the query, noting that search is unavailable.`
+            },
+            ...fallbackMessagesArray
+          ];
+
+          // CRITICAL: Verify conversation history is included in fallback (no search)
+          console.log('🔍 DEBUG: Tier 3 fallback (no search) messagesArray length:', messagesArray.length);
+          console.log('🔍 DEBUG: Tier 3 fallback (no search) messagesArray:', JSON.stringify(messagesArray, null, 2));
+          console.log('🔍 DEBUG: Tier 3 fallback (no search) fallbackTier2MessagesNoSearch length:', fallbackTier2MessagesNoSearch.length);
+          // DEBUG: Log messages array being sent to OpenAI (fallback - no search results)
+          console.log('🔍 DEBUG: Sending to OpenAI messages array (Tier 3 fallback - no search):', JSON.stringify(fallbackTier2MessagesNoSearch, null, 2));
+          console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(fallbackTier2MessagesNoSearch, null, 2));
+          
+          // CRITICAL: Log exactly what's being sent to OpenAI
+          console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(fallbackTier2MessagesNoSearch, null, 2));
+          console.log('🚀 Number of messages:', fallbackTier2MessagesNoSearch?.length || 0);
 
           const fallbackResponse = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -402,49 +494,65 @@ Respond with ONLY the search query, nothing else.`
             },
             body: JSON.stringify({
               model: 'gpt-4o',
-              messages: [
-                {
-                  role: 'system',
-                  content: 'You are Ray. Answer the query, noting that search is unavailable.'
-                },
-                ...messagesArray
-              ],
+              messages: fallbackTier2MessagesNoSearch,  // This includes system prompt + full conversation history
               temperature: 0.7,
-              max_tokens: 1000
+              max_tokens: 2000
             })
           });
 
           if (!fallbackResponse.ok) {
+            const errorText = await fallbackResponse.text();
+            console.error('❌ Tier 3 fallback error:', fallbackResponse.status, errorText);
             throw new Error(`OpenAI API error: ${fallbackResponse.status}`);
           }
 
           const fallbackData = await fallbackResponse.json();
-          message = fallbackData.choices?.[0]?.message?.content || '';
-          
-          if (!message) {
-            throw new Error('No content returned from OpenAI');
-          }
+          message = extractContent(fallbackData);
+          console.log('✅ Tier 3 fallback response generated');
+          console.log('🔍 DEBUG: OpenAI response received');
         } else {
-          const googleData = await googleResponse.json();
-          const items = googleData.items || [];
-          
-          const searchResults = items.slice(0, 3).map((item: any) => ({
-            title: item.title || '',
-            snippet: item.snippet || '',
-            link: item.link || ''
-          }));
-
-          sources = searchResults.map(r => r.link);
-          console.log(`✅ Found ${searchResults.length} search results`);
-
-          // Format search results clearly with Source 1, Source 2, etc.
+          // STEP 3: Synthesize with gpt-4o
           const formattedResults = searchResults.map((r, i) => 
             `Source ${i + 1}: ${r.title}
 Content: ${r.snippet}
 URL: ${r.link}`
           ).join('\n\n');
 
-          // Synthesize with gpt-4o (smarter at extracting info)
+          const systemPrompt = `You are Ray, a smart AI assistant helping the user with current information.
+
+The user asked: ${userQuery}
+
+I searched Google and found these current sources:
+
+${formattedResults}
+
+YOUR JOB: Answer the user's question directly using the information from these sources. Extract and present concrete data points (numbers, dates, facts, rankings, scores, etc.) from the search results.
+
+Be direct, specific, and helpful. Answer in 2-3 clear sentences with concrete data points.
+
+You have access to the full conversation history below. Use it to maintain context.`;
+
+          const tier3Messages = [
+            {
+              role: 'system',
+              content: systemPrompt
+            },
+            ...messagesArray  // Full conversation history from frontend
+          ];
+
+          console.log('🔍 Tier 3 - Sending', tier3Messages.length, 'messages to OpenAI for synthesis');
+          // CRITICAL: Verify conversation history is included
+          console.log('🔍 DEBUG: Tier 3 messagesArray length:', messagesArray.length);
+          console.log('🔍 DEBUG: Tier 3 messagesArray:', JSON.stringify(messagesArray, null, 2));
+          console.log('🔍 DEBUG: Tier 3 tier3Messages length:', tier3Messages.length);
+          // DEBUG: Log messages array being sent to OpenAI
+          console.log('🔍 DEBUG: Sending to OpenAI messages array:', JSON.stringify(tier3Messages, null, 2));
+          console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(tier3Messages, null, 2));
+          
+          // CRITICAL: Log exactly what's being sent to OpenAI
+          console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(tier3Messages, null, 2));
+          console.log('🚀 Number of messages:', tier3Messages?.length || 0);
+
           const summaryResponse = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -453,28 +561,7 @@ URL: ${r.link}`
             },
             body: JSON.stringify({
               model: 'gpt-4o',
-              messages: [
-                {
-                  role: 'system',
-                  content: `You are Ray, a smart AI assistant helping the user with current information.
-
-The user asked: ${userQuery}
-
-I searched Google and found these current sources:
-
-${formattedResults}
-
-Your job: Answer the user's question using these sources.
-
-IMPORTANT: These search result snippets often contain the exact data the user wants (population numbers, rankings, dates, etc.). Look carefully at the snippets and extract the specific information requested.
-
-If you see population numbers, rankings, scores, or other data in the snippets - USE THEM. Don't say "the sources don't contain this" if the data is clearly there in the snippet text.
-
-If the sources truly don't have the answer, admit it and suggest where to look.
-
-Be helpful and confident. Answer in 2-3 clear sentences.`
-                }
-              ],
+              messages: tier3Messages,
               temperature: 0.7,
               max_tokens: 1000
             })
@@ -487,13 +574,9 @@ Be helpful and confident. Answer in 2-3 clear sentences.`
           }
 
           const summaryData = await summaryResponse.json();
-          message = summaryData.choices?.[0]?.message?.content || '';
-          
-          if (!message) {
-            throw new Error('No content returned from OpenAI summary');
-          }
-
+          message = extractContent(summaryData);
           console.log('✅ Tier 3 response generated with search results');
+          console.log('🔍 DEBUG: OpenAI response received');
         }
       }
     } else {
@@ -505,11 +588,8 @@ Be helpful and confident. Answer in 2-3 clear sentences.`
       });
     }
 
-    if (!message) {
-      throw new Error('No message generated');
-    }
-
-    // Return response in the format iOS app expects
+    // Return response
+    // Note: Frontend manages conversation history - we don't need to save it here
     return res.status(200).json({
       ok: true,
       tier: tier,
@@ -520,11 +600,10 @@ Be helpful and confident. Answer in 2-3 clear sentences.`
     });
 
   } catch (error: any) {
-    console.error('❌ Internal server error:', error.message);
-    return res.status(500).json({ 
-      error: 'Internal server error', 
-      message: error.message || 'Unknown error occurred'
+    console.error('❌ Error in /api/ray:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message || 'An unexpected error occurred'
     });
   }
 }
-

@@ -17,7 +17,7 @@ class OpenAIService {
     private init() {}
     
     func sendChatMessage(messages: [Message], systemPrompt: String, model: String = "gpt-4o-mini") async throws -> String {
-        print("🎯 Ray: Processing \(messages.count) messages via smart routing")
+        print("🎯 Ray: Processing message via smart routing")
         
         guard let url = URL(string: rayRelayURL) else {
             throw OpenAIServiceError.invalidURL
@@ -37,14 +37,14 @@ class OpenAIService {
             throw OpenAIServiceError.invalidQuery
         }
         
-        // Build conversation history (last 10 message pairs = 20 messages total)
-        let recentMessages = Array(messages.suffix(20))
-        let conversationHistory: [[String: String]] = recentMessages.map { message in
+        // Build conversation history from messages array (same array used to display messages)
+        let conversationHistory: [[String: String]] = messages.map { message in
             [
                 "role": message.isFromUser ? "user" : "assistant",
                 "content": message.content
             ]
         }
+        print("📤 Sending \(conversationHistory.count) messages as conversation history")
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

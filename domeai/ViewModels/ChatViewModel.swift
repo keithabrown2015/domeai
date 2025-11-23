@@ -165,12 +165,13 @@ class ChatViewModel: ObservableObject {
             }
         }
         // RAY_MEMORY_SAVE_DETECTION_START
-        // CRITICAL: Detect "remember" commands BEFORE doing anything else
+        // NOTE: We still save to local Core Data memory, but we let Ray process the message too
+        // so Ray can see the conversation and extract memories for context
         let rememberKeywords = ["remember", "save this", "keep this", "don't forget", "store this", "note this"]
         let isRememberRequest = rememberKeywords.contains { content.lowercased().contains($0) }
         
         if isRememberRequest {
-            print("💾 User wants Ray to remember something")
+            print("💾 User wants Ray to remember something - saving to local memory AND letting Ray process")
             
             var contentToSave = content
             for keyword in rememberKeywords {
@@ -190,15 +191,8 @@ class ChatViewModel: ObservableObject {
             memories.append(memory)
             storageService.saveMemories(memories)
             
-            print("✅ Ray saved to memory: \(contentToSave.prefix(50))... with tags: \(autoTags)")
-            
-            await MainActor.run {
-                let confirmationMessage = "Got it! I've saved that to my memory. 🧠"
-                messages.append(Message(content: confirmationMessage, isFromUser: false))
-                storageService.saveMessages(messages)
-                isProcessing = false
-            }
-            return
+            print("✅ Saved to local Core Data memory: \(contentToSave.prefix(50))... with tags: \(autoTags)")
+            // NOTE: We continue processing so Ray can also see this message and respond naturally
         }
         // RAY_MEMORY_SAVE_DETECTION_END
         
@@ -359,25 +353,25 @@ class ChatViewModel: ObservableObject {
         }
         
         // RAY_CONVERSATION_CONTEXT_START
-        let recentMessages = Array(messages.suffix(10))
+        // Send the messages array (used to display messages) as conversationHistory to backend
+        // Backend will use this conversation history when calling OpenAI
         
         let raySystemPrompt = """
         You are Ray, a friendly, sharp, and helpful personal AI assistant living inside DomeAI.
         
         PERSONALITY:
         - You are warm, conversational, and supportive
-        - You remember context within conversations
+        - You maintain context within conversations
         - You give clear, concise answers (2-4 sentences typically)
         - You're proactive about helping the user stay organized
         
         CAPABILITIES YOU HAVE ACCESS TO:
-        - Memory system: User can ask you to remember things, and you save them
         - Calendar: User can ask about upcoming events
         - Tasks: User can ask about their to-do items
         - You search your internal database before answering
         
         IMPORTANT:
-        - Maintain conversational context - remember what was said earlier in THIS conversation
+        - Maintain conversational context - use what was said earlier in THIS conversation
         - Be specific and direct with answers
         - If you don't know something, be honest but helpful
         
@@ -385,8 +379,9 @@ class ChatViewModel: ObservableObject {
         """
         
         do {
+            // Send messages array as conversationHistory - backend passes it directly to OpenAI
             let response = try await OpenAIService.shared.sendChatMessage(
-                messages: recentMessages.isEmpty ? messages : recentMessages,
+                messages: messages,
                 systemPrompt: raySystemPrompt,
                 model: Config.defaultModel
             )

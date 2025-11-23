@@ -26,7 +26,7 @@ struct HomeView: View {
     @State private var scrollProxy: ScrollViewProxy?
     
     // Emoji reordering state
-    @State private var emojiOrder = ["🧠", "⏰", "✅", "📅", "💊", "🛒", "🏠", "💼", "🚗", "📫", "🏃", "🩺", "🔗", "✈️", "💰", "📷", "🖼️", "📁"]
+    @State private var emojiOrder = ["🧠", "⏰", "📅", "✔️", "🏃", "💊", "🩺", "🔗"]
     @State private var draggedEmoji: String?
     
     // Attachment picker states
