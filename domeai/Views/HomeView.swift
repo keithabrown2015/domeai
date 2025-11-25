@@ -888,7 +888,7 @@ struct MessageActionButtons: View {
     
     var body: some View {
         if message.isFromUser {
-            // USER BUTTONS - RIGHT ALIGNED
+            // USER BUTTONS - RIGHT ALIGNED (pinned to right side)
             HStack {
                 Spacer()
                 Button {
@@ -908,10 +908,10 @@ struct MessageActionButtons: View {
                     }
                 }
             }
-            .padding(.trailing, 70)
+            .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.top, 6)
         } else {
-            // RAY BUTTONS - LEFT ALIGNED
+            // RAY BUTTONS - LEFT ALIGNED (pinned to left side)
             HStack(spacing: 16) {
                 // Copy button
                 Button {
@@ -972,7 +972,7 @@ struct MessageActionButtons: View {
                     }
                 }
             }
-            .padding(.leading, 70)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 6)
         }
     }
