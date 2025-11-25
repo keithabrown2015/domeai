@@ -1,9 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 // SHORT-TERM CONVERSATIONAL MEMORY CONSTANTS
-// Ray only remembers the most recent N turns (1 turn = user message + assistant reply)
+// Ray only remembers the most recent N messages (not entire conversation history)
 // This keeps API costs low and conversational focus high
-const MAX_RECENT_TURNS = 12; // Ray remembers last 12 exchanges (24 messages total)
+const MAX_RECENT_MESSAGES = 20; // Only send the last 20 messages to OpenAI
 
 // Helper function to clean messages for OpenAI API
 // OpenAI only needs role and content - remove chatSessionId and other metadata
@@ -14,34 +14,91 @@ function cleanMessagesForOpenAI(messages: any[]): any[] {
   }));
 }
 
-// Helper function to format long-term user memories for system prompt
-// Formats personal facts that Ray should remember across all conversations
-function formatLongTermMemories(memories: any[]): string {
-  if (!memories || memories.length === 0) {
+// Helper function to format userProfile string for system prompt
+// userProfile contains personal facts stored on-device (name, kids, birthdays, etc.)
+function formatUserProfile(userProfile: string | undefined): string {
+  if (!userProfile || userProfile.trim().length === 0) {
     return '';
   }
   
-  // Filter for personal facts (category: personal or important personal details)
-  const personalFacts = memories
-    .filter((mem: any) => {
-      const category = mem.category?.toLowerCase() || '';
-      const content = (mem.content || '').toLowerCase();
-      // Include personal category or memories that seem like personal facts
-      return category === 'personal' || 
-             category === 'important' ||
-             content.includes('name is') ||
-             content.includes('my name') ||
-             content.includes('child') ||
-             content.includes('children');
-    })
-    .map((mem: any) => mem.content || '')
-    .filter(Boolean);
-  
-  if (personalFacts.length === 0) {
-    return '';
+  return `\n\nUSER PROFILE (stable personal facts you always remember):\n${userProfile.trim()}\n\nThese facts persist across all conversations. Use them naturally when relevant, but don't repeat them unnecessarily.`;
+}
+
+// Helper function to extract new personal details from user message and Ray's response
+// Returns structured JSON that iOS app can store on-device
+async function extractPersonalDetails(userMessage: string, rayResponse: string, openaiApiKey: string, extractContentFn: (responseData: any) => string): Promise<any[]> {
+  try {
+    const extractionPrompt = `Analyze this conversation and extract any NEW personal facts about the user that should be remembered permanently.
+
+User said: "${userMessage}"
+Ray responded: "${rayResponse}"
+
+Extract ONLY new personal facts such as:
+- Name (if mentioned)
+- Family members (spouse, children, parents, etc.)
+- Important dates (birthdays, anniversaries, etc.)
+- Personal preferences or important life details
+- Significant life events
+
+Return a JSON object with this exact format:
+{
+  "facts": [
+    {
+      "fact": "the personal fact to remember",
+      "category": "personal" | "family" | "dates" | "preferences" | "events"
+    }
+  ]
+}
+
+If NO new personal facts are mentioned, return: {"facts": []}
+
+Return ONLY valid JSON, no other text.`;
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiApiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a personal fact extraction system. Extract only new personal facts from conversations. Return valid JSON only.'
+          },
+          {
+            role: 'user',
+            content: extractionPrompt
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 500,
+        response_format: { type: 'json_object' }
+      })
+    });
+
+    if (!response.ok) {
+      console.error('❌ Personal details extraction failed:', response.status);
+      return [];
+    }
+
+    const data = await response.json();
+    const content = extractContentFn(data);
+    
+    try {
+      const parsed = JSON.parse(content);
+      // Handle { "facts": [...] } format
+      const facts = parsed.facts || [];
+      return Array.isArray(facts) ? facts : [];
+    } catch (e) {
+      console.error('❌ Failed to parse extracted personal details:', e);
+      return [];
+    }
+  } catch (error) {
+    console.error('❌ Error extracting personal details:', error);
+    return [];
   }
-  
-  return `\n\nLONG-TERM USER MEMORY (stable personal facts you always remember):\n${personalFacts.map((fact: string) => `- ${fact}`).join('\n')}\n\nThese facts persist across all conversations. Use them naturally when relevant, but don't repeat them unnecessarily.`;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -115,7 +172,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('📥 RECEIVED full body:', JSON.stringify(req.body, null, 2));
     
     // Parse request body
-    const { query, conversationHistory, chatSessionId, userMemories } = req.body;
+    const { query, conversationHistory, chatSessionId, userProfile } = req.body;
 
     if (!query || typeof query !== 'string') {
       return res.status(400).json({ 
@@ -126,17 +183,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const userQuery = query;
     const currentChatSessionId = chatSessionId || 'default'; // Default session if not provided
-    const longTermMemories = userMemories || []; // Long-term personal facts (separate from conversation)
     
     console.log('📥 Request received - Query:', userQuery.substring(0, 100));
     console.log('📥 Chat Session ID:', currentChatSessionId);
-    console.log('📥 Long-term memories count:', longTermMemories.length);
-    if (longTermMemories.length > 0) {
-      console.log('📥 Long-term memories preview:', longTermMemories.slice(0, 3).map((m: any) => m.content || m).join(', '));
+    console.log('📥 User Profile provided:', userProfile ? 'Yes' : 'No');
+    if (userProfile) {
+      console.log('📥 User Profile preview:', userProfile.substring(0, 100) + '...');
     }
 
     // SHORT-TERM CONVERSATIONAL MEMORY: SLIDING WINDOW APPROACH
-    // Ray only remembers the most recent MAX_RECENT_TURNS exchanges
+    // Ray only remembers the most recent MAX_RECENT_MESSAGES
     // This mimics ChatGPT's natural conversation flow and keeps API costs low
     
     let messagesArray: any[] = [];
@@ -165,12 +221,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       
       console.log(`📥 Filtered to ${sessionMessages.length} messages from current session (${currentChatSessionId})`);
       
-      // STEP 2: Apply sliding window - take only the last MAX_RECENT_TURNS * 2 messages
-      // (Each turn = 1 user message + 1 assistant reply = 2 messages)
-      const maxMessages = MAX_RECENT_TURNS * 2;
-      const recentMessages = sessionMessages.slice(-maxMessages);
+      // STEP 2: Apply sliding window - take only the last MAX_RECENT_MESSAGES
+      const recentMessages = sessionMessages.slice(-MAX_RECENT_MESSAGES);
       
-      console.log(`📥 Applied sliding window: ${sessionMessages.length} → ${recentMessages.length} messages (last ${MAX_RECENT_TURNS} turns)`);
+      console.log(`📥 Applied sliding window: ${sessionMessages.length} → ${recentMessages.length} messages (last ${MAX_RECENT_MESSAGES} messages)`);
+      console.log('🧠 recentMessages length:', recentMessages.length);
       
       if (sessionMessages.length > recentMessages.length) {
         const droppedCount = sessionMessages.length - recentMessages.length;
@@ -229,7 +284,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('\n' + '-'.repeat(80));
     console.log('📋 FINAL MESSAGES ARRAY (will be sent to OpenAI - SLIDING WINDOW):');
     console.log('📋 Total messages:', messagesArray.length);
-    console.log('📋 Memory window: Last', MAX_RECENT_TURNS, 'turns (', messagesArray.length, 'messages)');
+    console.log('📋 Memory window: Last', MAX_RECENT_MESSAGES, 'messages');
     messagesArray.forEach((msg, idx) => {
       const role = msg.role || 'unknown';
       const content = msg.content || '';
@@ -328,6 +383,7 @@ Be decisive and choose the most appropriate tier.`
     let message = '';
     let model = '';
     let sources: string[] = [];
+    let extractedPersonalDetails: any[] = []; // New personal facts extracted from conversation
     
     // TIER 1: Simple queries with gpt-4o-mini
     if (tier === 1) {
@@ -335,9 +391,9 @@ Be decisive and choose the most appropriate tier.`
       sources = [];
       model = 'gpt-4o-mini';
       
-      // Build system prompt with long-term memories
-      const memorySection = formatLongTermMemories(longTermMemories);
-      const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${memorySection}
+      // Build system prompt with userProfile
+      const userProfileSection = formatUserProfile(userProfile);
+      const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${userProfileSection}
 
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
@@ -383,14 +439,15 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context and answer questions that reference previous messages.`;
+You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
 
+      // Build messages array: system prompt + recent messages (sliding window)
       const tier1Messages = [
         {
           role: 'system',
           content: systemPrompt
         },
-        ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
+        ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
       ];
 
       // CRITICAL: Log exactly what's being sent to OpenAI
@@ -414,7 +471,7 @@ You have access to the recent conversation history below (last ${MAX_RECENT_TURN
         },
         body: JSON.stringify({
           model: 'gpt-4o-mini',
-          messages: tier1Messages,  // This includes system prompt + full conversation history
+          messages: tier1Messages,  // This includes system prompt + sliding window (last MAX_RECENT_MESSAGES)
           temperature: 0.7,
           max_tokens: 1000
         })
@@ -437,11 +494,11 @@ You have access to the recent conversation history below (last ${MAX_RECENT_TURN
       sources = [];
       model = 'gpt-4o';
       
-      // Build system prompt with long-term memories
-      const tier2MemorySection = formatLongTermMemories(longTermMemories);
+      // Build system prompt with userProfile
+      const tier2UserProfileSection = formatUserProfile(userProfile);
       const tier2SystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
 
-You excel at complex reasoning, coding, architecture, multi-step planning, and deep analysis. Provide thorough, well-reasoned responses.${tier2MemorySection}
+You excel at complex reasoning, coding, architecture, multi-step planning, and deep analysis. Provide thorough, well-reasoned responses.${tier2UserProfileSection}
 
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
@@ -487,14 +544,14 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context and answer questions that reference previous messages.`;
+You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
 
       const tier2Messages = [
         {
           role: 'system',
           content: tier2SystemPrompt
         },
-        ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
+        ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
       ];
 
       // CRITICAL: Log exactly what's being sent to OpenAI
@@ -555,9 +612,9 @@ You have access to the recent conversation history below (last ${MAX_RECENT_TURN
           }
         ];
 
-        // Build fallback system prompt with long-term memories
-        const fallbackMemorySection = formatLongTermMemories(longTermMemories);
-        const fallbackSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackMemorySection}
+        // Build fallback system prompt with userProfile
+        const fallbackUserProfileSection = formatUserProfile(userProfile);
+        const fallbackSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackUserProfileSection}
 
 Answer the query, noting that you cannot access current/recent information right now.
 
@@ -605,14 +662,14 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context.`;
+You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context.`;
 
         const fallbackTier2Messages = [
           {
             role: 'system',
             content: fallbackSystemPrompt
           },
-          ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
+          ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
         ];
 
         // CRITICAL: Verify conversation history is included in fallback
@@ -723,9 +780,9 @@ Respond with ONLY the search query, nothing else.`
             }
           ];
 
-          // Build fallback system prompt with long-term memories
-          const fallbackNoSearchMemorySection = formatLongTermMemories(longTermMemories);
-          const fallbackNoSearchSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackNoSearchMemorySection}
+          // Build fallback system prompt with userProfile
+          const fallbackNoSearchUserProfileSection = formatUserProfile(userProfile);
+          const fallbackNoSearchSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackNoSearchUserProfileSection}
 
 Answer the query, noting that search is unavailable.
 
@@ -773,14 +830,14 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context.`;
+You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context.`;
 
           const fallbackTier2MessagesNoSearch = [
             {
               role: 'system',
               content: fallbackNoSearchSystemPrompt
             },
-            ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
+            ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
           ];
 
           // CRITICAL: Verify conversation history is included in fallback (no search)
@@ -827,9 +884,9 @@ Content: ${r.snippet}
 URL: ${r.link}`
           ).join('\n\n');
 
-          // Build system prompt with long-term memories
-          const tier3MemorySection = formatLongTermMemories(longTermMemories);
-          const systemPrompt = `You are Ray, a helpful, reliable AI assistant helping the user with current information.${tier3MemorySection}
+          // Build system prompt with userProfile
+          const tier3UserProfileSection = formatUserProfile(userProfile);
+          const systemPrompt = `You are Ray, a helpful, reliable AI assistant helping the user with current information.${tier3UserProfileSection}
 
 The user asked: ${userQuery}
 
@@ -883,14 +940,14 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context.`;
+You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context.`;
 
           const tier3Messages = [
             {
               role: 'system',
               content: systemPrompt
             },
-            ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
+            ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
           ];
 
           // CRITICAL: Log exactly what's being sent to OpenAI
@@ -941,6 +998,18 @@ You have access to the recent conversation history below (last ${MAX_RECENT_TURN
       });
     }
 
+    // Extract new personal details from conversation (optional, non-blocking)
+    // This runs after we have Ray's response, so it doesn't slow down the main flow
+    try {
+      extractedPersonalDetails = await extractPersonalDetails(userQuery, message, openaiApiKey, extractContent);
+      if (extractedPersonalDetails.length > 0) {
+        console.log('📝 Extracted personal details:', JSON.stringify(extractedPersonalDetails, null, 2));
+      }
+    } catch (extractError) {
+      console.error('⚠️ Failed to extract personal details (non-critical):', extractError);
+      // Don't fail the request if extraction fails
+    }
+
     // Return response
     // Note: Frontend manages conversation history - we don't need to save it here
     return res.status(200).json({
@@ -949,7 +1018,8 @@ You have access to the recent conversation history below (last ${MAX_RECENT_TURN
       model: model,
       message: message,
       reasoning: reasoning,
-      sources: sources
+      sources: sources,
+      extractedPersonalDetails: extractedPersonalDetails.length > 0 ? extractedPersonalDetails : undefined
     });
 
   } catch (error: any) {
