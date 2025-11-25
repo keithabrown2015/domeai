@@ -1,5 +1,19 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
+// SHORT-TERM CONVERSATIONAL MEMORY CONSTANTS
+// Ray only remembers the most recent N turns (1 turn = user message + assistant reply)
+// This keeps API costs low and conversational focus high
+const MAX_RECENT_TURNS = 12; // Ray remembers last 12 exchanges (24 messages total)
+
+// Helper function to clean messages for OpenAI API
+// OpenAI only needs role and content - remove chatSessionId and other metadata
+function cleanMessagesForOpenAI(messages: any[]): any[] {
+  return messages.map(msg => ({
+    role: msg.role,
+    content: msg.content
+  }));
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Only accept POST requests
   if (req.method !== 'POST') {
@@ -71,7 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('📥 RECEIVED full body:', JSON.stringify(req.body, null, 2));
     
     // Parse request body
-    const { query, conversationHistory } = req.body;
+    const { query, conversationHistory, chatSessionId } = req.body;
 
     if (!query || typeof query !== 'string') {
       return res.status(400).json({ 
@@ -81,31 +95,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const userQuery = query;
+    const currentChatSessionId = chatSessionId || 'default'; // Default session if not provided
     console.log('📥 Request received - Query:', userQuery.substring(0, 100));
+    console.log('📥 Chat Session ID:', currentChatSessionId);
 
-    // RAY'S CONVERSATION MEMORY:
-    // Use conversation history from request body (sent from frontend)
-    // The frontend sends the FULL conversation history including:
-    // - All previous user messages
-    // - All previous assistant responses
-    // - The current user message (as the last message)
+    // SHORT-TERM CONVERSATIONAL MEMORY: SLIDING WINDOW APPROACH
+    // Ray only remembers the most recent MAX_RECENT_TURNS exchanges
+    // This mimics ChatGPT's natural conversation flow and keeps API costs low
+    
     let messagesArray: any[] = [];
     
     // CRITICAL DEBUG: Log what we received from frontend
     console.log('\n' + '='.repeat(80));
     console.log('📥 RECEIVED FROM FRONTEND:');
     console.log('📥 Query:', userQuery);
+    console.log('📥 Chat Session ID:', currentChatSessionId);
     console.log('📥 conversationHistory type:', typeof conversationHistory);
     console.log('📥 conversationHistory is array?', Array.isArray(conversationHistory));
     console.log('📥 conversationHistory length:', conversationHistory && Array.isArray(conversationHistory) ? conversationHistory.length : 0);
     
     if (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-      // Frontend sends conversation history, but we need to ensure the last message
-      // matches the current query exactly (in case it was incomplete or different)
-      messagesArray = [...conversationHistory];
+      // STEP 1: Filter by chatSessionId (per-session isolation)
+      // Only include messages from the current session
+      let sessionMessages = conversationHistory.filter((msg: any) => {
+        // If chatSessionId exists in message, filter by it
+        // Otherwise, include all messages (backward compatibility)
+        if (msg.chatSessionId !== undefined) {
+          return msg.chatSessionId === currentChatSessionId;
+        }
+        // For backward compatibility: if no chatSessionId in messages, include all
+        return true;
+      });
       
-      console.log('📥 Received', messagesArray.length, 'messages in conversation history');
-      console.log('📥 Full conversation history:');
+      console.log(`📥 Filtered to ${sessionMessages.length} messages from current session (${currentChatSessionId})`);
+      
+      // STEP 2: Apply sliding window - take only the last MAX_RECENT_TURNS * 2 messages
+      // (Each turn = 1 user message + 1 assistant reply = 2 messages)
+      const maxMessages = MAX_RECENT_TURNS * 2;
+      const recentMessages = sessionMessages.slice(-maxMessages);
+      
+      console.log(`📥 Applied sliding window: ${sessionMessages.length} → ${recentMessages.length} messages (last ${MAX_RECENT_TURNS} turns)`);
+      
+      if (sessionMessages.length > recentMessages.length) {
+        const droppedCount = sessionMessages.length - recentMessages.length;
+        console.log(`📥 Ray forgot ${droppedCount} older messages (natural forgetting behavior)`);
+      }
+      
+      messagesArray = [...recentMessages];
+      
+      console.log('📥 Recent conversation history (sliding window):');
       messagesArray.forEach((msg, idx) => {
         const role = msg.role || 'unknown';
         const content = msg.content || '';
@@ -113,7 +151,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log(`📥   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
       });
       
-      // CRITICAL: Ensure the last message matches the current user query exactly
+      // STEP 3: Ensure the last message matches the current user query exactly
       // The current query (req.body.query) is the source of truth
       const lastMsg = messagesArray[messagesArray.length - 1];
       if (lastMsg && lastMsg.role === 'user') {
@@ -127,7 +165,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           // Replace the last message with the current query (req.body.query is the source of truth)
           messagesArray[messagesArray.length - 1] = {
             role: 'user',
-            content: userQuery
+            content: userQuery,
+            chatSessionId: currentChatSessionId
           };
         }
       } else {
@@ -135,7 +174,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log('⚠️ Last message is not a user message, adding current query');
         messagesArray.push({
           role: 'user',
-          content: userQuery
+          content: userQuery,
+          chatSessionId: currentChatSessionId
         });
         console.log('⚠️ Added current user message. New total:', messagesArray.length);
       }
@@ -144,14 +184,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Fallback: create array with just current query
       messagesArray = [{
         role: 'user',
-        content: userQuery
+        content: userQuery,
+        chatSessionId: currentChatSessionId
       }];
     }
 
     // CRITICAL: Final verification before processing
     console.log('\n' + '-'.repeat(80));
-    console.log('📋 FINAL MESSAGES ARRAY (will be sent to OpenAI):');
+    console.log('📋 FINAL MESSAGES ARRAY (will be sent to OpenAI - SLIDING WINDOW):');
     console.log('📋 Total messages:', messagesArray.length);
+    console.log('📋 Memory window: Last', MAX_RECENT_TURNS, 'turns (', messagesArray.length, 'messages)');
     messagesArray.forEach((msg, idx) => {
       const role = msg.role || 'unknown';
       const content = msg.content || '';
@@ -308,7 +350,7 @@ REMEMBER:
 
 You have access to the full conversation history below. Use it to maintain context and answer questions that reference previous messages.`
         },
-        ...messagesArray  // Full conversation history from frontend
+        ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
       ];
 
       // CRITICAL: Log exactly what's being sent to OpenAI
@@ -408,7 +450,7 @@ REMEMBER:
 
 You have access to the full conversation history below. Use it to maintain context and answer questions that reference previous messages.`
         },
-        ...messagesArray  // Full conversation history from frontend
+        ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
       ];
 
       // CRITICAL: Log exactly what's being sent to OpenAI
@@ -522,7 +564,7 @@ REMEMBER:
 
 You have access to the full conversation history below. Use it to maintain context.`
           },
-          ...fallbackMessagesArray
+          ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
         ];
 
         // CRITICAL: Verify conversation history is included in fallback
@@ -686,7 +728,7 @@ REMEMBER:
 
 You have access to the full conversation history below. Use it to maintain context.`
             },
-            ...fallbackMessagesArray
+            ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
           ];
 
           // CRITICAL: Verify conversation history is included in fallback (no search)
@@ -794,7 +836,7 @@ You have access to the full conversation history below. Use it to maintain conte
               role: 'system',
               content: systemPrompt
             },
-            ...messagesArray  // Full conversation history from frontend
+            ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
           ];
 
           // CRITICAL: Log exactly what's being sent to OpenAI
