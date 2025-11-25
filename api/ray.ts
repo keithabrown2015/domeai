@@ -14,6 +14,36 @@ function cleanMessagesForOpenAI(messages: any[]): any[] {
   }));
 }
 
+// Helper function to format long-term user memories for system prompt
+// Formats personal facts that Ray should remember across all conversations
+function formatLongTermMemories(memories: any[]): string {
+  if (!memories || memories.length === 0) {
+    return '';
+  }
+  
+  // Filter for personal facts (category: personal or important personal details)
+  const personalFacts = memories
+    .filter((mem: any) => {
+      const category = mem.category?.toLowerCase() || '';
+      const content = (mem.content || '').toLowerCase();
+      // Include personal category or memories that seem like personal facts
+      return category === 'personal' || 
+             category === 'important' ||
+             content.includes('name is') ||
+             content.includes('my name') ||
+             content.includes('child') ||
+             content.includes('children');
+    })
+    .map((mem: any) => mem.content || '')
+    .filter(Boolean);
+  
+  if (personalFacts.length === 0) {
+    return '';
+  }
+  
+  return `\n\nLONG-TERM USER MEMORY (stable personal facts you always remember):\n${personalFacts.map((fact: string) => `- ${fact}`).join('\n')}\n\nThese facts persist across all conversations. Use them naturally when relevant, but don't repeat them unnecessarily.`;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Only accept POST requests
   if (req.method !== 'POST') {
@@ -85,7 +115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('📥 RECEIVED full body:', JSON.stringify(req.body, null, 2));
     
     // Parse request body
-    const { query, conversationHistory, chatSessionId } = req.body;
+    const { query, conversationHistory, chatSessionId, userMemories } = req.body;
 
     if (!query || typeof query !== 'string') {
       return res.status(400).json({ 
@@ -96,8 +126,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const userQuery = query;
     const currentChatSessionId = chatSessionId || 'default'; // Default session if not provided
+    const longTermMemories = userMemories || []; // Long-term personal facts (separate from conversation)
+    
     console.log('📥 Request received - Query:', userQuery.substring(0, 100));
     console.log('📥 Chat Session ID:', currentChatSessionId);
+    console.log('📥 Long-term memories count:', longTermMemories.length);
+    if (longTermMemories.length > 0) {
+      console.log('📥 Long-term memories preview:', longTermMemories.slice(0, 3).map((m: any) => m.content || m).join(', '));
+    }
 
     // SHORT-TERM CONVERSATIONAL MEMORY: SLIDING WINDOW APPROACH
     // Ray only remembers the most recent MAX_RECENT_TURNS exchanges
@@ -299,10 +335,9 @@ Be decisive and choose the most appropriate tier.`
       sources = [];
       model = 'gpt-4o-mini';
       
-      const tier1Messages = [
-        {
-          role: 'system',
-          content: `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
+      // Build system prompt with long-term memories
+      const memorySection = formatLongTermMemories(longTermMemories);
+      const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${memorySection}
 
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
@@ -348,7 +383,12 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the full conversation history below. Use it to maintain context and answer questions that reference previous messages.`
+You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context and answer questions that reference previous messages.`;
+
+      const tier1Messages = [
+        {
+          role: 'system',
+          content: systemPrompt
         },
         ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
       ];
@@ -397,12 +437,11 @@ You have access to the full conversation history below. Use it to maintain conte
       sources = [];
       model = 'gpt-4o';
       
-      const tier2Messages = [
-        {
-          role: 'system',
-          content: `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
+      // Build system prompt with long-term memories
+      const tier2MemorySection = formatLongTermMemories(longTermMemories);
+      const tier2SystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
 
-You excel at complex reasoning, coding, architecture, multi-step planning, and deep analysis. Provide thorough, well-reasoned responses.
+You excel at complex reasoning, coding, architecture, multi-step planning, and deep analysis. Provide thorough, well-reasoned responses.${tier2MemorySection}
 
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
@@ -448,7 +487,12 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the full conversation history below. Use it to maintain context and answer questions that reference previous messages.`
+You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context and answer questions that reference previous messages.`;
+
+      const tier2Messages = [
+        {
+          role: 'system',
+          content: tier2SystemPrompt
         },
         ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
       ];
@@ -511,10 +555,9 @@ You have access to the full conversation history below. Use it to maintain conte
           }
         ];
 
-        const fallbackTier2Messages = [
-          {
-            role: 'system',
-            content: `You are Ray, a helpful, reliable AI assistant living inside DomeAI.
+        // Build fallback system prompt with long-term memories
+        const fallbackMemorySection = formatLongTermMemories(longTermMemories);
+        const fallbackSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackMemorySection}
 
 Answer the query, noting that you cannot access current/recent information right now.
 
@@ -562,7 +605,12 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the full conversation history below. Use it to maintain context.`
+You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context.`;
+
+        const fallbackTier2Messages = [
+          {
+            role: 'system',
+            content: fallbackSystemPrompt
           },
           ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
         ];
@@ -675,10 +723,9 @@ Respond with ONLY the search query, nothing else.`
             }
           ];
 
-          const fallbackTier2MessagesNoSearch = [
-            {
-              role: 'system',
-              content: `You are Ray, a helpful, reliable AI assistant living inside DomeAI.
+          // Build fallback system prompt with long-term memories
+          const fallbackNoSearchMemorySection = formatLongTermMemories(longTermMemories);
+          const fallbackNoSearchSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackNoSearchMemorySection}
 
 Answer the query, noting that search is unavailable.
 
@@ -726,7 +773,12 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the full conversation history below. Use it to maintain context.`
+You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context.`;
+
+          const fallbackTier2MessagesNoSearch = [
+            {
+              role: 'system',
+              content: fallbackNoSearchSystemPrompt
             },
             ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_TURNS turns only
           ];
@@ -775,7 +827,9 @@ Content: ${r.snippet}
 URL: ${r.link}`
           ).join('\n\n');
 
-          const systemPrompt = `You are Ray, a helpful, reliable AI assistant helping the user with current information.
+          // Build system prompt with long-term memories
+          const tier3MemorySection = formatLongTermMemories(longTermMemories);
+          const systemPrompt = `You are Ray, a helpful, reliable AI assistant helping the user with current information.${tier3MemorySection}
 
 The user asked: ${userQuery}
 
@@ -829,7 +883,7 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the full conversation history below. Use it to maintain context.`;
+You have access to the recent conversation history below (last ${MAX_RECENT_TURNS} turns). Use it to maintain context.`;
 
           const tier3Messages = [
             {
