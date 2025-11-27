@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		D26217172EB786EE00A9D611 /* domeai.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = domeai.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D26217502EB7919200A9D612 /* api */ = {isa = PBXFileReference; lastKnownFileType = folder; path = api; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -46,6 +47,7 @@
 			isa = PBXGroup;
 			children = (
 				D26217192EB786EE00A9D611 /* domeai */,
+				D26217502EB7919200A9D612 /* api */,
 				D26217182EB786EE00A9D611 /* Products */,
 			);
 			sourceTree = "<group>";

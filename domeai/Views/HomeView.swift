@@ -503,6 +503,7 @@ struct HomeView: View {
             }
         }
     }
+    
 }
 
 // MARK: - Attachment Row View

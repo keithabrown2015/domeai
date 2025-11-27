@@ -1,17 +1,49 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { sendRayEmail } from './lib/email/sendRayEmail';
 
 // SHORT-TERM CONVERSATIONAL MEMORY CONSTANTS
 // Ray only remembers the most recent N messages (not entire conversation history)
 // This keeps API costs low and conversational focus high
-const MAX_RECENT_MESSAGES = 20; // Only send the last 20 messages to OpenAI
+const MAX_HISTORY_MESSAGES = 14; // Only send the last 14 messages to OpenAI
 
-// Helper function to clean messages for OpenAI API
-// OpenAI only needs role and content - remove chatSessionId and other metadata
-function cleanMessagesForOpenAI(messages: any[]): any[] {
-  return messages.map(msg => ({
-    role: msg.role,
-    content: msg.content
-  }));
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+// Helper function to detect if user requested email
+function userRequestedEmail(userMessage: string): boolean {
+  const lowered = userMessage.toLowerCase();
+  return (
+    lowered.includes("email that to me") ||
+    lowered.includes("email this to me") ||
+    lowered.includes("send that to my email") ||
+    lowered.includes("send this to my email") ||
+    lowered.includes("email those instructions") ||
+    lowered.includes("email these instructions")
+  );
+}
+
+// SHORT CONTEXT BUILDER: Creates a sliding window of recent messages for OpenAI
+// This prevents sending the entire conversation history and reduces token usage
+function buildChatMessages(options: {
+  systemPrompt: string;
+  conversationHistory: ChatMessage[] | undefined | null;
+  newUserMessage: string;
+}): ChatMessage[] {
+  const { systemPrompt, conversationHistory, newUserMessage } = options;
+
+  const safeHistory = Array.isArray(conversationHistory)
+    ? conversationHistory
+    : [];
+
+  // keep only the most recent messages
+  const trimmedHistory = safeHistory.slice(-MAX_HISTORY_MESSAGES);
+
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    ...trimmedHistory,
+    { role: "user", content: newUserMessage },
+  ];
+
+  return messages;
 }
 
 // Helper function to format userProfile string for system prompt
@@ -191,107 +223,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log('📥 User Profile preview:', userProfile.substring(0, 100) + '...');
     }
 
-    // SHORT-TERM CONVERSATIONAL MEMORY: SLIDING WINDOW APPROACH
-    // Ray only remembers the most recent MAX_RECENT_MESSAGES
-    // This mimics ChatGPT's natural conversation flow and keeps API costs low
+    // Prepare conversationHistory for sliding window processing
+    // Extract only role and content fields (ignore chatSessionId and other metadata)
+    // buildChatMessages will handle undefined/null, but we normalize it here for type safety
+    const conversationHistoryArray: ChatMessage[] | undefined = Array.isArray(conversationHistory)
+      ? conversationHistory.map(msg => ({
+          role: msg.role as "user" | "assistant",
+          content: msg.content
+        }))
+      : undefined;
     
-    let messagesArray: any[] = [];
-    
-    // CRITICAL DEBUG: Log what we received from frontend
-    console.log('\n' + '='.repeat(80));
-    console.log('📥 RECEIVED FROM FRONTEND:');
-    console.log('📥 Query:', userQuery);
+    console.log('📥 Received conversationHistory length:', conversationHistoryArray?.length ?? 0);
     console.log('📥 Chat Session ID:', currentChatSessionId);
-    console.log('📥 conversationHistory type:', typeof conversationHistory);
-    console.log('📥 conversationHistory is array?', Array.isArray(conversationHistory));
-    console.log('📥 conversationHistory length:', conversationHistory && Array.isArray(conversationHistory) ? conversationHistory.length : 0);
-    
-    if (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-      // STEP 1: Filter by chatSessionId (per-session isolation)
-      // Only include messages from the current session
-      let sessionMessages = conversationHistory.filter((msg: any) => {
-        // If chatSessionId exists in message, filter by it
-        // Otherwise, include all messages (backward compatibility)
-        if (msg.chatSessionId !== undefined) {
-          return msg.chatSessionId === currentChatSessionId;
-        }
-        // For backward compatibility: if no chatSessionId in messages, include all
-        return true;
-      });
-      
-      console.log(`📥 Filtered to ${sessionMessages.length} messages from current session (${currentChatSessionId})`);
-      
-      // STEP 2: Apply sliding window - take only the last MAX_RECENT_MESSAGES
-      const recentMessages = sessionMessages.slice(-MAX_RECENT_MESSAGES);
-      
-      console.log(`📥 Applied sliding window: ${sessionMessages.length} → ${recentMessages.length} messages (last ${MAX_RECENT_MESSAGES} messages)`);
-      console.log('🧠 recentMessages length:', recentMessages.length);
-      
-      if (sessionMessages.length > recentMessages.length) {
-        const droppedCount = sessionMessages.length - recentMessages.length;
-        console.log(`📥 Ray forgot ${droppedCount} older messages (natural forgetting behavior)`);
-      }
-      
-      messagesArray = [...recentMessages];
-      
-      console.log('📥 Recent conversation history (sliding window):');
-      messagesArray.forEach((msg, idx) => {
-        const role = msg.role || 'unknown';
-        const content = msg.content || '';
-        const preview = content.length > 80 ? content.substring(0, 80) + '...' : content;
-        console.log(`📥   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
-      });
-      
-      // STEP 3: Ensure the last message matches the current user query exactly
-      // The current query (req.body.query) is the source of truth
-      const lastMsg = messagesArray[messagesArray.length - 1];
-      if (lastMsg && lastMsg.role === 'user') {
-        if (lastMsg.content === userQuery) {
-          console.log('✅ Last message in conversation history matches current query');
-        } else {
-          console.log('⚠️ Last message in conversation history does NOT match current query');
-          console.log('⚠️ Last message content:', lastMsg.content);
-          console.log('⚠️ Current query:', userQuery);
-          console.log('⚠️ Replacing last message with current query (using req.body.query as source of truth)');
-          // Replace the last message with the current query (req.body.query is the source of truth)
-          messagesArray[messagesArray.length - 1] = {
-            role: 'user',
-            content: userQuery,
-            chatSessionId: currentChatSessionId
-          };
-        }
-      } else {
-        // Last message is not a user message, add current query
-        console.log('⚠️ Last message is not a user message, adding current query');
-        messagesArray.push({
-          role: 'user',
-          content: userQuery,
-          chatSessionId: currentChatSessionId
-        });
-        console.log('⚠️ Added current user message. New total:', messagesArray.length);
-      }
-    } else {
-      console.log('⚠️ No conversation history provided, starting new conversation');
-      // Fallback: create array with just current query
-      messagesArray = [{
-        role: 'user',
-        content: userQuery,
-        chatSessionId: currentChatSessionId
-      }];
-    }
-
-    // CRITICAL: Final verification before processing
-    console.log('\n' + '-'.repeat(80));
-    console.log('📋 FINAL MESSAGES ARRAY (will be sent to OpenAI - SLIDING WINDOW):');
-    console.log('📋 Total messages:', messagesArray.length);
-    console.log('📋 Memory window: Last', MAX_RECENT_MESSAGES, 'messages');
-    messagesArray.forEach((msg, idx) => {
-      const role = msg.role || 'unknown';
-      const content = msg.content || '';
-      const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
-      console.log(`📋   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
-    });
-    console.log('='.repeat(80) + '\n');
+    console.log('📥 User Query:', userQuery.substring(0, 100));
 
     // Check for OpenAI API key
     const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -395,6 +339,8 @@ Be decisive and choose the most appropriate tier.`
       const userProfileSection = formatUserProfile(userProfile);
       const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${userProfileSection}
 
+EMAIL CAPABILITY: Ray can send emails to the user via the backend when requested. If the user asks to "email that" or "send this to my email", the server logic will automatically send the assistant's reply by email. Ray should NOT say he cannot send emails; he should just respond normally, while the backend sends the email.
+
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
 REQUIRED RESPONSE STRUCTURE (MANDATORY):
@@ -439,29 +385,18 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
+You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
 
-      // Build messages array: system prompt + recent messages (sliding window)
-      const tier1Messages = [
-        {
-          role: 'system',
-          content: systemPrompt
-        },
-        ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
-      ];
-
-      // CRITICAL: Log exactly what's being sent to OpenAI
-      console.log('\n' + '='.repeat(80));
-      console.log('🚀 SENDING TO OPENAI (TIER 1):');
-      console.log('🚀 Total messages:', tier1Messages.length);
-      console.log('🚀 Messages array:');
-      tier1Messages.forEach((msg, idx) => {
-        const role = msg.role || 'unknown';
-        const content = msg.content || '';
-        const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
-        console.log(`🚀   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
+      // Build messages array using sliding window helper
+      const tier1Messages = buildChatMessages({
+        systemPrompt,
+        conversationHistory: conversationHistoryArray,
+        newUserMessage: userQuery
       });
-      console.log('='.repeat(80) + '\n');
+
+      // Log trimming verification
+      console.log("[ray] conversationHistory length:", conversationHistoryArray?.length ?? 0);
+      console.log("[ray] messages sent to OpenAI:", tier1Messages.length);
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -471,7 +406,7 @@ You have access to the recent conversation history below (last ${MAX_RECENT_MESS
         },
         body: JSON.stringify({
           model: 'gpt-4o-mini',
-          messages: tier1Messages,  // This includes system prompt + sliding window (last MAX_RECENT_MESSAGES)
+          messages: tier1Messages,  // This includes system prompt + sliding window (last MAX_HISTORY_MESSAGES)
           temperature: 0.7,
           max_tokens: 1000
         })
@@ -500,6 +435,8 @@ You have access to the recent conversation history below (last ${MAX_RECENT_MESS
 
 You excel at complex reasoning, coding, architecture, multi-step planning, and deep analysis. Provide thorough, well-reasoned responses.${tier2UserProfileSection}
 
+EMAIL CAPABILITY: Ray can send emails to the user via the backend when requested. If the user asks to "email that" or "send this to my email", the server logic will automatically send the assistant's reply by email. Ray should NOT say he cannot send emails; he should just respond normally, while the backend sends the email.
+
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
 REQUIRED RESPONSE STRUCTURE (MANDATORY):
@@ -544,28 +481,18 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
+You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
 
-      const tier2Messages = [
-        {
-          role: 'system',
-          content: tier2SystemPrompt
-        },
-        ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
-      ];
-
-      // CRITICAL: Log exactly what's being sent to OpenAI
-      console.log('\n' + '='.repeat(80));
-      console.log('🚀 SENDING TO OPENAI (TIER 2):');
-      console.log('🚀 Total messages:', tier2Messages.length);
-      console.log('🚀 Messages array:');
-      tier2Messages.forEach((msg, idx) => {
-        const role = msg.role || 'unknown';
-        const content = msg.content || '';
-        const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
-        console.log(`🚀   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
+      // Build messages array using sliding window helper
+      const tier2Messages = buildChatMessages({
+        systemPrompt: tier2SystemPrompt,
+        conversationHistory: conversationHistoryArray,
+        newUserMessage: userQuery
       });
-      console.log('='.repeat(80) + '\n');
+
+      // Log trimming verification
+      console.log("[ray] conversationHistory length:", conversationHistoryArray?.length ?? 0);
+      console.log("[ray] messages sent to OpenAI:", tier2Messages.length);
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -605,18 +532,14 @@ You have access to the recent conversation history below (last ${MAX_RECENT_MESS
         sources = [];
         // Fallback to Tier 2
         model = 'gpt-4o';
-        const fallbackMessagesArray = messagesArray.length > 0 ? messagesArray : [
-          {
-            role: 'user',
-            content: `${userQuery}\n\nNote: I wanted to search for current information, but search is unavailable. Answering from my knowledge instead.`
-          }
-        ];
 
         // Build fallback system prompt with userProfile
         const fallbackUserProfileSection = formatUserProfile(userProfile);
         const fallbackSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackUserProfileSection}
 
 Answer the query, noting that you cannot access current/recent information right now.
+
+EMAIL CAPABILITY: Ray can send emails to the user via the backend when requested. If the user asks to "email that" or "send this to my email", the server logic will automatically send the assistant's reply by email. Ray should NOT say he cannot send emails; he should just respond normally, while the backend sends the email.
 
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
@@ -662,27 +585,18 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context.`;
+You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context.`;
 
-        const fallbackTier2Messages = [
-          {
-            role: 'system',
-            content: fallbackSystemPrompt
-          },
-          ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
-        ];
+        // Build messages array using sliding window helper
+        const fallbackTier2Messages = buildChatMessages({
+          systemPrompt: fallbackSystemPrompt,
+          conversationHistory: conversationHistoryArray,
+          newUserMessage: `${userQuery}\n\nNote: I wanted to search for current information, but search is unavailable. Answering from my knowledge instead.`
+        });
 
-        // CRITICAL: Verify conversation history is included in fallback
-        console.log('🔍 DEBUG: Tier 3 fallback messagesArray length:', messagesArray.length);
-        console.log('🔍 DEBUG: Tier 3 fallback messagesArray:', JSON.stringify(messagesArray, null, 2));
-        console.log('🔍 DEBUG: Tier 3 fallback fallbackTier2Messages length:', fallbackTier2Messages.length);
-        // DEBUG: Log messages array being sent to OpenAI (fallback)
-        console.log('🔍 DEBUG: Sending to OpenAI messages array (Tier 3 fallback):', JSON.stringify(fallbackTier2Messages, null, 2));
-        console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(fallbackTier2Messages, null, 2));
-        
-        // CRITICAL: Log exactly what's being sent to OpenAI
-        console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(fallbackTier2Messages, null, 2));
-        console.log('🚀 Number of messages:', fallbackTier2Messages?.length || 0);
+        // Log trimming verification
+        console.log("[ray] conversationHistory length:", conversationHistoryArray?.length ?? 0);
+        console.log("[ray] messages sent to OpenAI:", fallbackTier2Messages.length);
 
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
@@ -773,18 +687,14 @@ Respond with ONLY the search query, nothing else.`
           console.log('⚠️ No search results, falling back to Tier 2');
           sources = [];
           model = 'gpt-4o';
-          const fallbackMessagesArray = messagesArray.length > 0 ? messagesArray : [
-            {
-              role: 'user',
-              content: `${userQuery}\n\nNote: Search failed, answering from my knowledge instead.`
-            }
-          ];
 
           // Build fallback system prompt with userProfile
           const fallbackNoSearchUserProfileSection = formatUserProfile(userProfile);
           const fallbackNoSearchSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackNoSearchUserProfileSection}
 
 Answer the query, noting that search is unavailable.
+
+EMAIL CAPABILITY: Ray can send emails to the user via the backend when requested. If the user asks to "email that" or "send this to my email", the server logic will automatically send the assistant's reply by email. Ray should NOT say he cannot send emails; he should just respond normally, while the backend sends the email.
 
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
@@ -830,27 +740,18 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context.`;
+You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context.`;
 
-          const fallbackTier2MessagesNoSearch = [
-            {
-              role: 'system',
-              content: fallbackNoSearchSystemPrompt
-            },
-            ...cleanMessagesForOpenAI(fallbackMessagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
-          ];
+          // Build messages array using sliding window helper
+          const fallbackTier2MessagesNoSearch = buildChatMessages({
+            systemPrompt: fallbackNoSearchSystemPrompt,
+            conversationHistory: conversationHistoryArray,
+            newUserMessage: `${userQuery}\n\nNote: Search failed, answering from my knowledge instead.`
+          });
 
-          // CRITICAL: Verify conversation history is included in fallback (no search)
-          console.log('🔍 DEBUG: Tier 3 fallback (no search) messagesArray length:', messagesArray.length);
-          console.log('🔍 DEBUG: Tier 3 fallback (no search) messagesArray:', JSON.stringify(messagesArray, null, 2));
-          console.log('🔍 DEBUG: Tier 3 fallback (no search) fallbackTier2MessagesNoSearch length:', fallbackTier2MessagesNoSearch.length);
-          // DEBUG: Log messages array being sent to OpenAI (fallback - no search results)
-          console.log('🔍 DEBUG: Sending to OpenAI messages array (Tier 3 fallback - no search):', JSON.stringify(fallbackTier2MessagesNoSearch, null, 2));
-          console.log('🔍 DEBUG: Messages being sent to OpenAI:', JSON.stringify(fallbackTier2MessagesNoSearch, null, 2));
-          
-          // CRITICAL: Log exactly what's being sent to OpenAI
-          console.log('🚀 SENDING TO OPENAI - Messages array:', JSON.stringify(fallbackTier2MessagesNoSearch, null, 2));
-          console.log('🚀 Number of messages:', fallbackTier2MessagesNoSearch?.length || 0);
+          // Log trimming verification
+          console.log("[ray] conversationHistory length:", conversationHistoryArray?.length ?? 0);
+          console.log("[ray] messages sent to OpenAI:", fallbackTier2MessagesNoSearch.length);
 
           const fallbackResponse = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -896,6 +797,8 @@ ${formattedResults}
 
 YOUR JOB: Answer the user's question directly using the information from these sources. Extract and present concrete data points (numbers, dates, facts, rankings, scores, etc.) from the search results.
 
+EMAIL CAPABILITY: Ray can send emails to the user via the backend when requested. If the user asks to "email that" or "send this to my email", the server logic will automatically send the assistant's reply by email. Ray should NOT say he cannot send emails; he should just respond normally, while the backend sends the email.
+
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
 REQUIRED RESPONSE STRUCTURE (MANDATORY):
@@ -940,28 +843,18 @@ REMEMBER:
 - NO emojis, NO robotic language, NO "As an AI model..." phrasing.
 - Sound like a knowledgeable friend who's in your corner.
 
-You have access to the recent conversation history below (last ${MAX_RECENT_MESSAGES} messages). Use it to maintain context.`;
+You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context.`;
 
-          const tier3Messages = [
-            {
-              role: 'system',
-              content: systemPrompt
-            },
-            ...cleanMessagesForOpenAI(messagesArray)  // Sliding window: last MAX_RECENT_MESSAGES only
-          ];
-
-          // CRITICAL: Log exactly what's being sent to OpenAI
-          console.log('\n' + '='.repeat(80));
-          console.log('🚀 SENDING TO OPENAI (TIER 3 SYNTHESIS):');
-          console.log('🚀 Total messages:', tier3Messages.length);
-          console.log('🚀 Messages array:');
-          tier3Messages.forEach((msg, idx) => {
-            const role = msg.role || 'unknown';
-            const content = msg.content || '';
-            const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
-            console.log(`🚀   [${idx + 1}] ${role.toUpperCase()}: "${preview}"`);
+          // Build messages array using sliding window helper
+          const tier3Messages = buildChatMessages({
+            systemPrompt,
+            conversationHistory: conversationHistoryArray,
+            newUserMessage: userQuery
           });
-          console.log('='.repeat(80) + '\n');
+
+          // Log trimming verification
+          console.log("[ray] conversationHistory length:", conversationHistoryArray?.length ?? 0);
+          console.log("[ray] messages sent to OpenAI:", tier3Messages.length);
 
           const summaryResponse = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
@@ -1008,6 +901,48 @@ You have access to the recent conversation history below (last ${MAX_RECENT_MESS
     } catch (extractError) {
       console.error('⚠️ Failed to extract personal details (non-critical):', extractError);
       // Don't fail the request if extraction fails
+    }
+
+    // Auto-send email if user requested it
+    if (userRequestedEmail(userQuery)) {
+      try {
+        const defaultEmail = process.env.RAY_DEFAULT_TEST_EMAIL || "keithabrown2015@gmail.com";
+        
+        // Create a short subject from the first few words of the reply
+        const firstLine = message.split('\n')[0];
+        const subjectPreview = firstLine.length > 50 
+          ? firstLine.substring(0, 50) + '...' 
+          : firstLine;
+        const emailSubject = `From Ray: ${subjectPreview}`;
+        
+        // Convert message to HTML (preserve line breaks)
+        const emailHtml = message.split('\n').map(line => {
+          // Check if line starts with bullet points
+          if (line.trim().startsWith('-') || line.trim().startsWith('•')) {
+            return `<p style="margin: 8px 0;">${line.trim()}</p>`;
+          }
+          return `<p style="margin: 8px 0;">${line}</p>`;
+        }).join('');
+        
+        await sendRayEmail({
+          to: defaultEmail,
+          subject: emailSubject,
+          html: `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333;">${emailHtml}</div>`
+        });
+        
+        console.log('📧 Auto-sent email:', {
+          to: defaultEmail,
+          subject: emailSubject,
+          triggerPhrase: userQuery,
+          bodyPreview: message.substring(0, 100) + '...'
+        });
+      } catch (emailError: any) {
+        // Log error but don't break the chat response
+        console.error('⚠️ Failed to send auto-email (non-critical):', {
+          error: emailError.message || 'Unknown error',
+          triggerPhrase: userQuery
+        });
+      }
     }
 
     // Return response

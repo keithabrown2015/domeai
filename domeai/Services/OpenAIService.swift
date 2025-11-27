@@ -349,6 +349,61 @@ class OpenAIService {
         print("👁️ Vision analysis complete")
         return content
     }
+    
+    // MARK: - Email Test
+    
+    func sendTestEmail(to email: String?) async throws {
+        let emailURL = "\(Config.vercelBaseURL)/api/ray/send-email"
+        
+        guard let url = URL(string: emailURL) else {
+            throw OpenAIServiceError.invalidURL
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "X-App-Token")
+        request.timeoutInterval = 30
+        
+        let body: [String: Any] = [
+            "to": email as Any,
+            "subject": "Test email from Ray",
+            "html": "<p>This is a test email sent from Ray through DomeAI.</p>"
+        ]
+        
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        print("📧 Sending test email to: \(email ?? "default")")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OpenAIServiceError.invalidResponse
+        }
+        
+        print("📧 Email API response status: \(httpResponse.statusCode)")
+        
+        guard httpResponse.statusCode == 200 else {
+            let errorString = String(data: data, encoding: .utf8) ?? "No error details"
+            print("📧 Email API error response: \(errorString)")
+            throw OpenAIServiceError.httpError(httpResponse.statusCode)
+        }
+        
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw OpenAIServiceError.invalidResponse
+        }
+        
+        print("📧 Email API response: \(json)")
+        
+        guard let ok = json["ok"] as? Bool, ok else {
+            if let errorMessage = json["error"] as? String {
+                throw OpenAIServiceError.apiError(errorMessage)
+            }
+            throw OpenAIServiceError.invalidResponse
+        }
+        
+        print("✅ Test email sent successfully")
+    }
 }
 
 // MARK: - OpenAIService Errors
