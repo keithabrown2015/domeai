@@ -12,6 +12,9 @@ import Combine
 
 @MainActor
 class ChatViewModel: ObservableObject {
+    // MARK: - Dependencies
+    var userSettings: UserSettings?
+    
     // MARK: - Published Properties
     
     /// RAY'S CONVERSATION MEMORY:
@@ -208,11 +211,13 @@ class ChatViewModel: ObservableObject {
         do {
             await MainActor.run { isProcessing = true }
             
+            let userEmail = userSettings?.email
             let response = try await OpenAIService.shared.sendChatMessageWithHistory(
                 messages: allMessages,
                 conversationHistory: conversationHistory,
                 systemPrompt: raySystemPrompt,
-                model: Config.defaultModel
+                model: Config.defaultModel,
+                userEmail: userEmail
             )
             
             // STEP 4: Append Ray's response to messages array

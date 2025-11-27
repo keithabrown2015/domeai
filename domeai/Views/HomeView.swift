@@ -12,10 +12,12 @@ import UniformTypeIdentifiers
 
 struct HomeView: View {
     @EnvironmentObject var chatViewModel: ChatViewModel
+    @EnvironmentObject var userSettings: UserSettings
     @ObservedObject var ttsService = TextToSpeechService.shared
     @State private var selectedCategory: MemoryCategory?
     @State private var messageText: String = ""
     @State private var showingAttachmentSheet = false
+    @State private var showingEmailSettings = false
     @State private var pulseScale: CGFloat = 1.0
     @State private var selectedSection: String = "🧠"
     @FocusState private var isTextFieldFocused: Bool
@@ -82,7 +84,7 @@ struct HomeView: View {
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        testOpenAIConnection()
+                        showingEmailSettings = true
                     } label: {
                         Image(systemName: "wrench.and.screwdriver")
                             .foregroundColor(.blue)

@@ -12,6 +12,7 @@ import Speech
 @main
 struct domeaiApp: App {
     @StateObject private var chatViewModel = ChatViewModel()
+    @StateObject private var userSettings = UserSettings()
     @Environment(\.scenePhase) private var scenePhase
     
     init() {
@@ -28,6 +29,11 @@ struct domeaiApp: App {
             NavigationStack {
                 HomeView()
                     .environmentObject(chatViewModel)
+                    .environmentObject(userSettings)
+                    .onAppear {
+                        // Inject userSettings into ChatViewModel
+                        chatViewModel.userSettings = userSettings
+                    }
             }
             .onAppear {
                 // Additional setup on first appearance

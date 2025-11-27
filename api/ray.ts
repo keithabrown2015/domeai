@@ -204,7 +204,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('📥 RECEIVED full body:', JSON.stringify(req.body, null, 2));
     
     // Parse request body
-    const { query, conversationHistory, chatSessionId, userProfile } = req.body;
+    const { query, conversationHistory, chatSessionId, userProfile, userEmail } = req.body;
+    
+    // Process userEmail: trim and validate
+    const trimmedUserEmail = (userEmail || "").trim() || undefined;
 
     if (!query || typeof query !== 'string') {
       return res.status(400).json({ 
@@ -905,43 +908,64 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
 
     // Auto-send email if user requested it
     if (userRequestedEmail(userQuery)) {
-      try {
-        const defaultEmail = process.env.RAY_DEFAULT_TEST_EMAIL || "keithabrown2015@gmail.com";
-        
-        // Create a short subject from the first few words of the reply
-        const firstLine = message.split('\n')[0];
+      // Find the last assistant message (the one we're about to return)
+      // This is the message variable that contains Ray's current response
+      const lastAssistantMessage = message;
+      
+      // Create a subject from the first line or a generic title
+      const firstLine = lastAssistantMessage.split('\n')[0];
+      let emailSubject = "From Ray: Directions";
+      if (firstLine && firstLine.length > 0) {
         const subjectPreview = firstLine.length > 50 
           ? firstLine.substring(0, 50) + '...' 
           : firstLine;
-        const emailSubject = `From Ray: ${subjectPreview}`;
-        
-        // Convert message to HTML (preserve line breaks)
-        const emailHtml = message.split('\n').map(line => {
-          // Check if line starts with bullet points
-          if (line.trim().startsWith('-') || line.trim().startsWith('•')) {
-            return `<p style="margin: 8px 0;">${line.trim()}</p>`;
-          }
-          return `<p style="margin: 8px 0;">${line}</p>`;
-        }).join('');
-        
-        await sendRayEmail({
-          to: defaultEmail,
-          subject: emailSubject,
-          html: `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333;">${emailHtml}</div>`
-        });
-        
-        console.log('📧 Auto-sent email:', {
-          to: defaultEmail,
-          subject: emailSubject,
-          triggerPhrase: userQuery,
-          bodyPreview: message.substring(0, 100) + '...'
-        });
-      } catch (emailError: any) {
-        // Log error but don't break the chat response
-        console.error('⚠️ Failed to send auto-email (non-critical):', {
-          error: emailError.message || 'Unknown error',
-          triggerPhrase: userQuery
-        });
+        emailSubject = `From Ray: ${subjectPreview}`;
+      }
+      
+      // Convert message to HTML (preserve line breaks)
+      const emailHtml = lastAssistantMessage.split('\n').map(line => {
+        // Check if line starts with bullet points
+        if (line.trim().startsWith('-') || line.trim().startsWith('•')) {
+          return `<p style="margin: 8px 0;">${line.trim()}</p>`;
+        }
+        return `<p style="margin: 8px 0;">${line}</p>`;
+      }).join('');
+      
+      const formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333;">${emailHtml}</div>`;
+      
+      // Check if we have a user email
+      if (!trimmedUserEmail) {
+        // No email stored - modify Ray's response to be honest
+        console.log('📧 Email requested but no userEmail provided');
+        message = `I tried to email that, but I don't know your email address yet. Please open Dome's settings and add your email first. For now, here are the directions again:\n\n${lastAssistantMessage}`;
+      } else {
+        // We have an email - try to send it
+        try {
+          await sendRayEmail({
+            to: trimmedUserEmail,
+            subject: emailSubject,
+            html: formattedHtml
+          });
+          
+          console.log('📧 Auto-sent email:', {
+            to: trimmedUserEmail,
+            subject: emailSubject,
+            triggerPhrase: userQuery,
+            bodyPreview: lastAssistantMessage.substring(0, 100) + '...'
+          });
+          
+          // Modify Ray's response to confirm email was sent
+          message = `I've sent those directions to your email on file. Here's a quick recap of what I sent:\n\n${lastAssistantMessage}`;
+        } catch (emailError: any) {
+          // Email failed - modify Ray's response to be honest about the failure
+          console.error('⚠️ Failed to send auto-email:', {
+            error: emailError.message || 'Unknown error',
+            triggerPhrase: userQuery,
+            to: trimmedUserEmail
+          });
+          
+          message = `I tried to email those directions to you, but something went wrong sending the email. For now, here's the full text so you can copy and paste it:\n\n${lastAssistantMessage}`;
+        }
       }
     }
 

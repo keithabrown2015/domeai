@@ -18,7 +18,7 @@ class OpenAIService {
     
     /// NEW SIMPLE FUNCTION: Send chat message with explicit conversationHistory
     /// This function receives the conversationHistory already built, ensuring it's correct
-    func sendChatMessageWithHistory(messages: [Message], conversationHistory: [[String: String]], systemPrompt: String, model: String = "gpt-4o-mini") async throws -> String {
+    func sendChatMessageWithHistory(messages: [Message], conversationHistory: [[String: String]], systemPrompt: String, model: String = "gpt-4o-mini", userEmail: String? = nil) async throws -> String {
         print("\n" + String(repeating: "=", count: 80))
         print("📤 sendChatMessageWithHistory CALLED")
         print("📤 Received messages.count: \(messages.count)")
@@ -40,10 +40,15 @@ class OpenAIService {
         }
         
         // Build request body with the conversationHistory we received
-        let requestBody: [String: Any] = [
+        var requestBody: [String: Any] = [
             "query": userQuery,
             "conversationHistory": conversationHistory
         ]
+        
+        // Add userEmail if provided
+        if let email = userEmail?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
+            requestBody["userEmail"] = email
+        }
         
         // CRITICAL DEBUG: Log exactly what we're sending
         print("📤 REQUEST BODY:")
@@ -85,7 +90,7 @@ class OpenAIService {
     }
     
     /// OLD FUNCTION: Keep for backward compatibility but mark as deprecated
-    func sendChatMessage(messages: [Message], systemPrompt: String, model: String = "gpt-4o-mini") async throws -> String {
+    func sendChatMessage(messages: [Message], systemPrompt: String, model: String = "gpt-4o-mini", userEmail: String? = nil) async throws -> String {
         print("🎯 Ray: Processing message via smart routing")
         
         // CRITICAL VERIFICATION: Log what we actually received
@@ -192,11 +197,16 @@ class OpenAIService {
         request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "X-App-Token")
         request.timeoutInterval = 30
         
-        // /api/ray endpoint expects: { "query": "current message", "conversationHistory": [...] }
-        let requestBody: [String: Any] = [
+        // /api/ray endpoint expects: { "query": "current message", "conversationHistory": [...], "userEmail": "optional" }
+        var requestBody: [String: Any] = [
             "query": userQuery,
             "conversationHistory": conversationHistory
         ]
+        
+        // Add userEmail if provided
+        if let email = userEmail?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
+            requestBody["userEmail"] = email
+        }
         
         // CRITICAL VERIFICATION: Ensure conversationHistory contains all expected messages
         // For second message, we should have: [user1, assistant1, user2]

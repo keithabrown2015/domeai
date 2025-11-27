@@ -12,6 +12,14 @@ export async function sendRayEmail(options: { to: string; subject: string; html:
   if (!fromEmail) {
     throw new Error("RAY_FROM_EMAIL environment variable is not set");
   }
+  
+  // Validate recipient email
+  const trimmedTo = (options.to || "").trim();
+  if (!trimmedTo) {
+    throw new Error("sendRayEmail called without recipient email");
+  }
+  
+  console.log("EMAIL: sending to", trimmedTo, "subject:", options.subject);
 
   const resend = new Resend(resendApiKey);
 
