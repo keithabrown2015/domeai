@@ -38,6 +38,11 @@ class ChatViewModel: ObservableObject {
     @Published var selectedMessageSources: [MessageSource] = []
     @Published var isRefreshing: Bool = false
     
+    // MARK: - Save Command Tracking
+    /// Track last user question and last assistant answer for save commands
+    private var lastUserQuestion: String? = nil
+    private var lastAssistantAnswer: String? = nil
+    
     // MARK: - Services
     
     private let storageService = StorageService.shared
@@ -88,6 +93,246 @@ class ChatViewModel: ObservableObject {
         nudges = storageService.loadNudges()
     }
     
+    // MARK: - Save Command Detection and Handling
+    
+    /// Save command mode
+    enum SaveCommandMode {
+        case saveAssistantAnswer
+        case saveUserNote
+    }
+    
+    /// Parsed save command structure
+    struct SaveCommand {
+        let mode: SaveCommandMode
+        let content: String
+        let title: String
+        let zoneHint: String?
+    }
+    
+    /// Detect if message is a save command and parse it
+    func parseSaveCommand(_ text: String, lastAssistant: String?, lastUser: String?) -> SaveCommand? {
+        let normalized = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Save assistant answer patterns
+        let saveAssistantPatterns = [
+            "save that",
+            "save this",
+            "save that answer",
+            "save this answer",
+            "save that in",
+            "save this in",
+            "save that to",
+            "save this to"
+        ]
+        
+        // Save user note patterns
+        let saveNotePatterns = [
+            "save this as a note",
+            "save this note",
+            "save this in"
+        ]
+        
+        // Check for save assistant answer
+        for pattern in saveAssistantPatterns {
+            if normalized.hasPrefix(pattern) {
+                guard let assistantContent = lastAssistant, !assistantContent.isEmpty else {
+                    print("💾 Save command detected but no assistant answer available")
+                    return nil
+                }
+                
+                // Extract zone hint if present
+                var zoneHint: String? = nil
+                if normalized.contains("in my") {
+                    let parts = normalized.components(separatedBy: "in my")
+                    if parts.count > 1 {
+                        let hintPart = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Remove "zone" if present
+                        zoneHint = hintPart.replacingOccurrences(of: "zone", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                } else if normalized.contains("in ") {
+                    let parts = normalized.components(separatedBy: "in ")
+                    if parts.count > 1 {
+                        let hintPart = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Remove "zone" if present
+                        zoneHint = hintPart.replacingOccurrences(of: "zone", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                }
+                
+                // Build title from last user question
+                let title = buildTitleFromQuestion(lastUser ?? "Saved answer")
+                
+                return SaveCommand(
+                    mode: .saveAssistantAnswer,
+                    content: assistantContent,
+                    title: title,
+                    zoneHint: zoneHint
+                )
+            }
+        }
+        
+        // Check for save user note
+        for pattern in saveNotePatterns {
+            if normalized.hasPrefix(pattern) {
+                // Extract content after the pattern
+                var content = text
+                for p in saveNotePatterns {
+                    if let range = content.lowercased().range(of: p) {
+                        content = String(content[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        break
+                    }
+                }
+                
+                // Extract zone hint if present
+                var zoneHint: String? = nil
+                if content.lowercased().contains("in my") {
+                    let parts = content.lowercased().components(separatedBy: "in my")
+                    if parts.count > 1 {
+                        let hintPart = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Remove "zone" if present
+                        zoneHint = hintPart.replacingOccurrences(of: "zone", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Remove zone hint from content
+                        if let range = content.lowercased().range(of: "in my") {
+                            content = String(content[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    }
+                } else if content.lowercased().contains("in ") {
+                    let parts = content.lowercased().components(separatedBy: "in ")
+                    if parts.count > 1 {
+                        let hintPart = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Remove "zone" if present
+                        zoneHint = hintPart.replacingOccurrences(of: "zone", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Remove zone hint from content
+                        if let range = content.lowercased().range(of: "in ") {
+                            content = String(content[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    }
+                }
+                
+                // Remove colon if present at start
+                if content.hasPrefix(":") {
+                    content = String(content.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                
+                if content.isEmpty {
+                    return nil
+                }
+                
+                let title = buildTitleFromContent(content)
+                
+                return SaveCommand(
+                    mode: .saveUserNote,
+                    content: content,
+                    title: title,
+                    zoneHint: zoneHint
+                )
+            }
+        }
+        
+        return nil
+    }
+    
+    /// Build title from user question (for saving assistant answers)
+    private func buildTitleFromQuestion(_ question: String) -> String {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 80 {
+            return trimmed
+        }
+        return String(trimmed.prefix(77)) + "..."
+    }
+    
+    /// Build title from content (for saving user notes)
+    private func buildTitleFromContent(_ content: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 80 {
+            return trimmed
+        }
+        return String(trimmed.prefix(77)) + "..."
+    }
+    
+    /// Save content to Ray Items via /api/ray-items endpoint
+    func saveContentToRayItems(command: SaveCommand) async -> (success: Bool, zone: String?, errorMessage: String?) {
+        print("💾 Saving content to Ray Items")
+        print("💾 Mode: \(command.mode == .saveAssistantAnswer ? "assistant_answer" : "user_note")")
+        print("💾 Title: \(command.title)")
+        print("💾 Zone hint: \(command.zoneHint ?? "none")")
+        
+        guard let url = URL(string: "\(Config.vercelBaseURL)/api/ray-items") else {
+            print("❌ Invalid URL for ray-items endpoint")
+            return (false, nil, "Invalid URL")
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "X-App-Token")
+        request.timeoutInterval = 10
+        
+        let source = command.mode == .saveAssistantAnswer ? "assistant_answer" : "user_note"
+        
+        let body: [String: Any] = [
+            "title": command.title,
+            "content": command.content,
+            "source": source,
+            "zoneHint": command.zoneHint as Any
+        ]
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                print("❌ Invalid response type")
+                return (false, nil, "Invalid response")
+            }
+            
+            guard httpResponse.statusCode == 200 else {
+                let errorString = String(data: data, encoding: .utf8) ?? "Unknown error"
+                print("❌ HTTP error: \(httpResponse.statusCode) - \(errorString)")
+                return (false, nil, "HTTP error: \(httpResponse.statusCode)")
+            }
+            
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let success = json["success"] as? Bool, success,
+                  let zone = json["zone"] as? String else {
+                print("❌ Invalid response format")
+                return (false, nil, "Invalid response format")
+            }
+            
+            print("✅ Successfully saved to zone: \(zone)")
+            return (true, zone, nil)
+            
+        } catch {
+            print("❌ Error saving to Ray Items: \(error)")
+            return (false, nil, error.localizedDescription)
+        }
+    }
+    
+    /// Get zone label with emoji for display
+    private func getZoneLabel(_ zone: String) -> String {
+        let zoneMap: [String: String] = [
+            "brain": "🧠 Dome Brain",
+            "nudges": "⏰ Nudges",
+            "calendar": "📅 Calendar",
+            "tasks": "✅ Tasks",
+            "exercise": "🏃 Exercise",
+            "meds": "💊 Meds",
+            "health": "🩺 Health"
+        ]
+        return zoneMap[zone] ?? "📝 \(zone.capitalized)"
+    }
+    
+    /// Helper to append assistant message and track it for save commands
+    private func appendAssistantMessage(_ content: String, sources: [MessageSource]? = nil) {
+        let message = Message(content: content, isFromUser: false, sources: sources)
+        messages.append(message)
+        trimMessagesIfNeeded()
+        // Track last assistant answer for save commands (only for non-error messages)
+        if !content.contains("I'm having trouble") && !content.contains("something went wrong") {
+            lastAssistantAnswer = content
+        }
+    }
+    
     // MARK: - Message Handling
     
     /// SIMPLE, EXPLICIT TEXT CHAT SEND PATH
@@ -128,6 +373,9 @@ class ChatViewModel: ObservableObject {
         trimMessagesIfNeeded()
         print("📤 AFTER APPENDING: messages.count = \(messages.count)")
         
+        // Update last user question
+        lastUserQuestion = messageContent
+        
         // Log full messages array
         print("📤 FULL MESSAGES ARRAY NOW:")
         for (index, msg) in messages.enumerated() {
@@ -139,7 +387,16 @@ class ChatViewModel: ObservableObject {
         currentAttachment = nil
         storageService.saveMessages(messages)
         
-        // STEP 2: Send to API with FULL conversation history
+        // STEP 2: Check for save command BEFORE sending to API
+        if let saveCommand = parseSaveCommand(messageContent, lastAssistant: lastAssistantAnswer, lastUser: lastUserQuestion) {
+            print("💾 Save command detected, skipping OpenAI API call")
+            Task {
+                await handleSaveCommand(saveCommand)
+            }
+            return
+        }
+        
+        // STEP 3: Send to API with FULL conversation history (normal flow)
         Task {
             await sendMessageToAPI(userMessageContent: messageContent, attachment: attachmentData)
         }
@@ -223,9 +480,7 @@ class ChatViewModel: ObservableObject {
             
             // STEP 4: Append Ray's response to messages array
             await MainActor.run {
-                let rayResponse = Message(content: response, isFromUser: false)
-                messages.append(rayResponse)
-                trimMessagesIfNeeded()
+                appendAssistantMessage(response)
                 storageService.saveMessages(messages)
                 print("📡 Added Ray's response. Total messages: \(messages.count)")
                 isProcessing = false
@@ -623,9 +878,7 @@ class ChatViewModel: ObservableObject {
                 print("💬 Current messages count: \(beforeCount)")
                 
                 // Create and append Ray's response
-                let rayResponse = Message(content: response, isFromUser: false)
-                messages.append(rayResponse)
-                trimMessagesIfNeeded()
+                appendAssistantMessage(response)
                 
                 // CRITICAL: Save immediately to ensure persistence
                 storageService.saveMessages(messages)
@@ -770,8 +1023,7 @@ class ChatViewModel: ObservableObject {
                 }
             }
             await MainActor.run {
-                messages.append(Message(content: rayResponse, isFromUser: false, sources: sources))
-                trimMessagesIfNeeded()
+                appendAssistantMessage(rayResponse, sources: sources)
                 storageService.saveMessages(messages)
                 isProcessing = false
             }
@@ -889,13 +1141,7 @@ class ChatViewModel: ObservableObject {
             )
             
             await MainActor.run {
-                let rayMessage = Message(
-                    content: rayResponse,
-                    isFromUser: false,
-                    sources: sources
-                )
-                messages.append(rayMessage)
-                trimMessagesIfNeeded()
+                appendAssistantMessage(rayResponse, sources: sources)
                 storageService.saveMessages(messages)
                 isProcessing = false
             }
@@ -1494,6 +1740,40 @@ class ChatViewModel: ObservableObject {
         let limit = 200
         if messages.count > limit {
             messages.removeFirst(messages.count - limit)
+        }
+    }
+    
+    /// Handle save command - call API and insert confirmation message
+    private func handleSaveCommand(_ command: SaveCommand) async {
+        await MainActor.run {
+            isProcessing = true
+        }
+        
+        let result = await saveContentToRayItems(command: command)
+        
+        await MainActor.run {
+            isProcessing = false
+            
+            if result.success, let zone = result.zone {
+                let zoneLabel = getZoneLabel(zone)
+                let confirmationMessage = Message(
+                    content: "Got it — I saved that in your \(zoneLabel) zone.",
+                    isFromUser: false
+                )
+                messages.append(confirmationMessage)
+                trimMessagesIfNeeded()
+                storageService.saveMessages(messages)
+                print("✅ Save confirmation added to chat")
+            } else {
+                let errorMessage = Message(
+                    content: "I tried to save that, but something went wrong. Please try again later.",
+                    isFromUser: false
+                )
+                messages.append(errorMessage)
+                trimMessagesIfNeeded()
+                storageService.saveMessages(messages)
+                print("❌ Save failed, error message added to chat")
+            }
         }
     }
     

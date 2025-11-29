@@ -7,5 +7,6 @@ export interface RayItem {
   subzone: string | null;
   kind: string;
   tags?: string | null;
+  source: "assistant_answer" | "user_note";
 }
 
