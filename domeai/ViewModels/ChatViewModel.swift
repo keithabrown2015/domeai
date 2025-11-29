@@ -156,8 +156,8 @@ class ChatViewModel: ObservableObject {
                 // Send the save command text itself - backend will extract assistant message
                 return SaveCommand(
                     mode: .saveAssistantAnswer,
-                    content: text.trim(),  // Send command text, backend will extract
-                    title: text.trim(),    // Send command text, backend will extract
+                    content: text.trimmingCharacters(in: .whitespacesAndNewlines),  // Send command text, backend will extract
+                    title: text.trimmingCharacters(in: .whitespacesAndNewlines),    // Send command text, backend will extract
                     zoneHint: zoneHint
                 )
             }
