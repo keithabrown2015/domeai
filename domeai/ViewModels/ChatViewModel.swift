@@ -125,6 +125,7 @@ class ChatViewModel: ObservableObject {
         
         print("📤 BEFORE APPENDING: messages.count = \(messages.count)")
         messages.append(userMessage)
+        trimMessagesIfNeeded()
         print("📤 AFTER APPENDING: messages.count = \(messages.count)")
         
         // Log full messages array
@@ -224,6 +225,7 @@ class ChatViewModel: ObservableObject {
             await MainActor.run {
                 let rayResponse = Message(content: response, isFromUser: false)
                 messages.append(rayResponse)
+                trimMessagesIfNeeded()
                 storageService.saveMessages(messages)
                 print("📡 Added Ray's response. Total messages: \(messages.count)")
                 isProcessing = false
@@ -232,6 +234,7 @@ class ChatViewModel: ObservableObject {
             print("❌ Error: \(error)")
             await MainActor.run {
                 messages.append(Message(content: "I'm having trouble processing that right now. Error: \(error.localizedDescription)", isFromUser: false))
+                trimMessagesIfNeeded()
                 storageService.saveMessages(messages)
                 isProcessing = false
             }
@@ -275,6 +278,7 @@ class ChatViewModel: ObservableObject {
                 await MainActor.run {
                     let rayMsg = Message(content: visionResponse, isFromUser: false)
                     messages.append(rayMsg)
+                    trimMessagesIfNeeded()
                     storageService.saveMessages(messages)
                     isProcessing = false
                 }
@@ -284,6 +288,7 @@ class ChatViewModel: ObservableObject {
                 print("🔴 Vision error: \(error)")
                 await MainActor.run {
                     messages.append(Message(content: "I'm having trouble analyzing that image right now. Error: \(error.localizedDescription)", isFromUser: false))
+                    trimMessagesIfNeeded()
                     isProcessing = false
                 }
                 return
@@ -328,6 +333,7 @@ class ChatViewModel: ObservableObject {
             let response = rayGetUpcomingEvents()
             await MainActor.run {
                 messages.append(Message(content: response, isFromUser: false))
+                trimMessagesIfNeeded()
                 storageService.saveMessages(messages)
                 isProcessing = false
             }
@@ -338,6 +344,7 @@ class ChatViewModel: ObservableObject {
             let response = rayGetActiveTasks()
             await MainActor.run {
                 messages.append(Message(content: response, isFromUser: false))
+                trimMessagesIfNeeded()
                 storageService.saveMessages(messages)
                 isProcessing = false
             }
@@ -422,6 +429,7 @@ class ChatViewModel: ObservableObject {
                 
                 await MainActor.run {
                     messages.append(Message(content: response, isFromUser: false))
+                    trimMessagesIfNeeded()
                     storageService.saveMessages(messages)
                     isProcessing = false
                 }
@@ -617,6 +625,7 @@ class ChatViewModel: ObservableObject {
                 // Create and append Ray's response
                 let rayResponse = Message(content: response, isFromUser: false)
                 messages.append(rayResponse)
+                trimMessagesIfNeeded()
                 
                 // CRITICAL: Save immediately to ensure persistence
                 storageService.saveMessages(messages)
@@ -648,6 +657,7 @@ class ChatViewModel: ObservableObject {
             print("🔴 Error calling OpenAI: \(error)")
             await MainActor.run {
                 messages.append(Message(content: "I'm having trouble processing that right now. Error: \(error.localizedDescription)", isFromUser: false))
+                trimMessagesIfNeeded()
                 storageService.saveMessages(messages)
                 isProcessing = false
             }
@@ -761,6 +771,7 @@ class ChatViewModel: ObservableObject {
             }
             await MainActor.run {
                 messages.append(Message(content: rayResponse, isFromUser: false, sources: sources))
+                trimMessagesIfNeeded()
                 storageService.saveMessages(messages)
                 isProcessing = false
             }
@@ -884,6 +895,7 @@ class ChatViewModel: ObservableObject {
                     sources: sources
                 )
                 messages.append(rayMessage)
+                trimMessagesIfNeeded()
                 storageService.saveMessages(messages)
                 isProcessing = false
             }
@@ -892,6 +904,7 @@ class ChatViewModel: ObservableObject {
             print("🔴 OpenAI error: \(error)")
             await MainActor.run {
                 messages.append(Message(content: "I'm having trouble thinking right now. Can you try again?", isFromUser: false))
+                trimMessagesIfNeeded()
                 isProcessing = false
             }
         }
@@ -962,6 +975,7 @@ class ChatViewModel: ObservableObject {
             
             await MainActor.run {
                 messages.append(Message(content: response, isFromUser: false))
+                trimMessagesIfNeeded()
                 isProcessing = false
             }
             // No auto-play
@@ -1474,6 +1488,15 @@ class ChatViewModel: ObservableObject {
         StorageService.shared.saveMessages(messages)
     }
     
+    /// Trim messages array to keep only the most recent 200 messages for UI display
+    /// This prevents the chat screen from scrolling forever while maintaining recent conversation context
+    private func trimMessagesIfNeeded() {
+        let limit = 200
+        if messages.count > limit {
+            messages.removeFirst(messages.count - limit)
+        }
+    }
+    
     /// Start a new conversation by clearing the messages array
     /// Call this when user explicitly wants to start fresh (e.g., taps "New Chat" button)
     func startNewConversation() {
@@ -1751,6 +1774,7 @@ class ChatViewModel: ObservableObject {
         guard let lastRayMessage = messages.last(where: { !$0.isFromUser }) else {
             await MainActor.run {
                 messages.append(Message(content: "I don't have any content to create a document from. Could you ask me a question first, then request a document?", isFromUser: false))
+                trimMessagesIfNeeded()
                 isProcessing = false
             }
             return
@@ -1781,11 +1805,13 @@ class ChatViewModel: ObservableObject {
             if let url = generatedURL {
                 let response = "I've created a \(fileType) for you! Tap the share button below to save or share it."
                 messages.append(Message(content: response, isFromUser: false))
+                trimMessagesIfNeeded()
                 
                 // Share the file immediately
                 DocumentGenerationService.shared.shareFile(url: url)
             } else {
                 messages.append(Message(content: "I had trouble creating that \(fileType). Please try again.", isFromUser: false))
+                trimMessagesIfNeeded()
             }
             isProcessing = false
         }
@@ -1802,9 +1828,11 @@ class ChatViewModel: ObservableObject {
         await MainActor.run {
             if hasAccess {
                 messages.append(Message(content: "I'm scanning your emails for shopping and order information...", isFromUser: false))
+                trimMessagesIfNeeded()
                 // TODO: Actually scan emails when API is integrated
             } else {
                 messages.append(Message(content: "I need permission to access your emails for that. Email integration requires connecting your Gmail or Outlook account. Would you like me to guide you through setting that up?", isFromUser: false))
+                trimMessagesIfNeeded()
             }
             isProcessing = false
         }
