@@ -21,6 +21,166 @@ function userRequestedEmail(userMessage: string): boolean {
   );
 }
 
+// DOME ZONES: Helper functions for save command detection and classification
+
+// Detect if message is a save command
+function isSaveCommand(message: string): boolean {
+  const normalized = message.toLowerCase().trim();
+  const saveTriggers = [
+    "ray, save this:",
+    "save this:",
+    "save this note:",
+    "save this as a memory:",
+    "save this task:",
+    "save this reminder:",
+    "save a pill reminder:",
+    "save a workout:",
+    "save to",
+    "save this to"
+  ];
+  
+  // Check if message starts with any trigger (case-insensitive, allow extra spaces)
+  for (const trigger of saveTriggers) {
+    const triggerLower = trigger.toLowerCase();
+    // Remove leading "ray," if present for comparison
+    const cleaned = normalized.replace(/^ray,\s*/i, '').trim();
+    if (cleaned.startsWith(triggerLower) || normalized.startsWith(triggerLower)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// Extract content from save command by stripping trigger phrase
+function extractSaveContent(message: string): string {
+  const normalized = message.trim();
+  const saveTriggers = [
+    "ray, save this:",
+    "save this:",
+    "save this note:",
+    "save this as a memory:",
+    "save this task:",
+    "save this reminder:",
+    "save a pill reminder:",
+    "save a workout:",
+    "save to",
+    "save this to"
+  ];
+  
+  // Remove leading "ray," if present
+  let cleaned = normalized.replace(/^ray,\s*/i, '').trim();
+  
+  // Find and remove the trigger phrase
+  for (const trigger of saveTriggers) {
+    const triggerLower = trigger.toLowerCase();
+    if (cleaned.toLowerCase().startsWith(triggerLower)) {
+      cleaned = cleaned.substring(triggerLower.length).trim();
+      break;
+    }
+  }
+  
+  // If nothing remains, use full original message
+  return cleaned.length > 0 ? cleaned : normalized;
+}
+
+// Classify saved item into zone, subzone, and kind
+function classifySavedItem(rawContent: string): {
+  zone: string;
+  subzone: string | null;
+  kind: string;
+} {
+  const lowerContent = rawContent.toLowerCase();
+  
+  // Default values
+  let zone = "brain";
+  let subzone: string | null = "notes";
+  let kind = "note";
+  
+  // Meds (pill stuff) - check first as it's most specific
+  const medKeywords = ["pill", "tablet", "capsule", "mg", "dose", "take"];
+  const hasMedKeywords = medKeywords.some(keyword => lowerContent.includes(keyword));
+  
+  if (hasMedKeywords) {
+    zone = "meds";
+    subzone = null;
+    const timeKeywords = ["every day at", "at 8am", "each morning", "before bed", "every morning", "daily at"];
+    const hasTimeLanguage = timeKeywords.some(keyword => lowerContent.includes(keyword));
+    kind = hasTimeLanguage ? "reminder" : "note";
+    return { zone, subzone, kind };
+  }
+  
+  // Nudges / Generic Reminders
+  const reminderKeywords = ["remind me", "nudge me", "every day at", "each morning", "tomorrow at", "next week"];
+  const hasReminderKeywords = reminderKeywords.some(keyword => lowerContent.includes(keyword));
+  const isNotMedication = !hasMedKeywords;
+  
+  if (hasReminderKeywords && isNotMedication) {
+    zone = "nudges";
+    subzone = null;
+    kind = "reminder";
+    return { zone, subzone, kind };
+  }
+  
+  // Exercise
+  const exerciseKeywords = ["workout", "ran", "run", "walked", "steps", "gym", "lifting", "squats", "miles"];
+  const hasExerciseKeywords = exerciseKeywords.some(keyword => lowerContent.includes(keyword));
+  
+  if (hasExerciseKeywords) {
+    zone = "exercise";
+    subzone = null;
+    kind = "log";
+    return { zone, subzone, kind };
+  }
+  
+  // Tasks - check for action verbs at start
+  const taskActionVerbs = ["call ", "email ", "text ", "buy ", "pick up ", "schedule ", "book ", "make an appointment"];
+  const startsWithTaskVerb = taskActionVerbs.some(verb => lowerContent.startsWith(verb));
+  
+  if (startsWithTaskVerb) {
+    zone = "tasks";
+    subzone = "personal";
+    kind = "task";
+    return { zone, subzone, kind };
+  }
+  
+  // Calendar - time-based events without "remind me"
+  const timePatterns = ["on friday", "at 7pm", "on monday", "next week", "tomorrow", "on ", "at "];
+  const hasTimePattern = timePatterns.some(pattern => lowerContent.includes(pattern));
+  const isNotReminder = !lowerContent.includes("remind me");
+  
+  if (hasTimePattern && isNotReminder && !hasMedKeywords && !hasReminderKeywords) {
+    zone = "calendar";
+    subzone = null;
+    kind = "calendar_event";
+    return { zone, subzone, kind };
+  }
+  
+  // Default: brain zone
+  return { zone, subzone, kind };
+}
+
+// Build title from content (max 60 chars)
+function buildTitleFromContent(rawContent: string): string {
+  const trimmed = rawContent.trim();
+  if (trimmed.length <= 60) return trimmed;
+  return trimmed.slice(0, 57) + "...";
+}
+
+// Map zone to pretty label with emoji
+function getZoneLabel(zone: string): string {
+  const zoneMap: Record<string, string> = {
+    brain: "🧠 Dome Brain",
+    nudges: "⏰ Nudges",
+    calendar: "📅 Calendar",
+    tasks: "✅ Tasks",
+    exercise: "🏃 Exercise",
+    meds: "💊 Meds",
+    health: "🩺 Health"
+  };
+  return zoneMap[zone] || `📝 ${zone}`;
+}
+
 // SHORT CONTEXT BUILDER: Creates a sliding window of recent messages for OpenAI
 // This prevents sending the entire conversation history and reduces token usage
 function buildChatMessages(options: {
@@ -224,6 +384,87 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('📥 User Profile provided:', userProfile ? 'Yes' : 'No');
     if (userProfile) {
       console.log('📥 User Profile preview:', userProfile.substring(0, 100) + '...');
+    }
+
+    // DOME ZONES: Check for save commands BEFORE OpenAI processing
+    if (isSaveCommand(userQuery)) {
+      console.log('💾 Save command detected:', userQuery.substring(0, 100));
+      
+      try {
+        // Step 1: Extract content
+        const rawContent = extractSaveContent(userQuery);
+        console.log('💾 Extracted content:', rawContent.substring(0, 100));
+        
+        // Step 2: Classify item
+        const classification = classifySavedItem(rawContent);
+        console.log('💾 Classification:', classification);
+        
+        // Step 3: Build title
+        const title = buildTitleFromContent(rawContent);
+        
+        // Step 4: Call /api/ray-items
+        // Construct URL from request headers or environment
+        const host = req.headers.host || 'localhost:3000';
+        const protocol = host.includes('localhost') ? 'http' : 'https';
+        const baseUrl = `${protocol}://${host}`;
+        
+        const saveResponse = await fetch(`${baseUrl}/api/ray-items`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            title,
+            content: rawContent.trim(),
+            zone: classification.zone,
+            subzone: classification.subzone,
+            kind: classification.kind
+          })
+        });
+        
+        if (!saveResponse.ok) {
+          const errorText = await saveResponse.text();
+          console.error('❌ Save failed:', saveResponse.status, errorText);
+          return res.status(200).json({
+            ok: true,
+            tier: 0,
+            model: 'dome-zones',
+            message: "I tried to save that into your Dome Zones but ran into a storage error. Please try again in a moment.",
+            reasoning: 'Save command detected but storage failed',
+            sources: [],
+            extractedPersonalDetails: undefined
+          });
+        }
+        
+        const savedItem = await saveResponse.json();
+        console.log('✅ Item saved:', savedItem.id);
+        
+        // Step 5: Return branded success message
+        const zoneLabel = getZoneLabel(classification.zone);
+        const successMessage = `Got it — I saved that in your ${zoneLabel} zone.`;
+        
+        return res.status(200).json({
+          ok: true,
+          tier: 0,
+          model: 'dome-zones',
+          message: successMessage,
+          reasoning: 'Save command processed successfully',
+          sources: [],
+          extractedPersonalDetails: undefined
+        });
+        
+      } catch (error: any) {
+        console.error('❌ Error processing save command:', error);
+        return res.status(200).json({
+          ok: true,
+          tier: 0,
+          model: 'dome-zones',
+          message: "I tried to save that into your Dome Zones but ran into a storage error. Please try again in a moment.",
+          reasoning: 'Save command detected but processing failed',
+          sources: [],
+          extractedPersonalDetails: undefined
+        });
+      }
     }
 
     // Prepare conversationHistory for sliding window processing

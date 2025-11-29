@@ -3,5 +3,9 @@ export interface RayItem {
   created_at: string;
   title: string;
   content: string;
+  zone: string;
+  subzone: string | null;
+  kind: string;
+  tags?: string | null;
 }
 

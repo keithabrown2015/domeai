@@ -6,7 +6,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Handle POST requests - create new ray_item
   if (req.method === 'POST') {
     try {
-      const { title, content } = req.body;
+      const { title, content, zone, subzone, kind, tags } = req.body;
 
       // Validate input
       if (!title || typeof title !== 'string' || title.trim().length === 0) {
@@ -23,12 +23,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
 
+      // Apply server-side defaults
+      const finalZone = (zone && typeof zone === 'string' && zone.trim().length > 0) 
+        ? zone.trim() 
+        : 'brain';
+      
+      const finalKind = (kind && typeof kind === 'string' && kind.trim().length > 0) 
+        ? kind.trim() 
+        : 'note';
+      
+      const finalSubzone = (subzone && typeof subzone === 'string' && subzone.trim().length > 0) 
+        ? subzone.trim() 
+        : null;
+      
+      const finalTags = (tags && typeof tags === 'string' && tags.trim().length > 0) 
+        ? tags.trim() 
+        : null;
+
       // Insert into Supabase
       const { data, error } = await supabaseAdmin
         .from('ray_items')
         .insert({
           title: title.trim(),
-          content: content.trim()
+          content: content.trim(),
+          zone: finalZone,
+          subzone: finalSubzone,
+          kind: finalKind,
+          tags: finalTags
         })
         .select()
         .single();
@@ -54,10 +75,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Handle GET requests - list all ray_items
   if (req.method === 'GET') {
     try {
-      const { data, error } = await supabaseAdmin
+      const { zone, kind } = req.query;
+      
+      let query = supabaseAdmin
         .from('ray_items')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .select('*');
+      
+      // Apply filters if provided
+      if (zone && typeof zone === 'string') {
+        query = query.eq('zone', zone);
+      }
+      
+      if (kind && typeof kind === 'string') {
+        query = query.eq('kind', kind);
+      }
+      
+      const { data, error } = await query.order('created_at', { ascending: false });
 
       if (error) {
         console.error('❌ Supabase select error:', error);
@@ -83,4 +116,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     message: 'Only GET and POST requests are accepted'
   });
 }
-
