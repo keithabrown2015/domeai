@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "DomeAI backend API",
   "dependencies": {
+    "@supabase/supabase-js": "^2.49.0",
     "@vercel/node": "^3.0.0",
     "resend": "^3.0.0"
   }
