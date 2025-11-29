@@ -1,4 +1,10 @@
 {
-  "version": 2
+  "version": 2,
+  "routes": [
+    {
+      "src": "/api/ray-items",
+      "dest": "/api/ray-items.ts"
+    }
+  ]
 }
 
