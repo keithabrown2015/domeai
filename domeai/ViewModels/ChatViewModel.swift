@@ -135,11 +135,6 @@ class ChatViewModel: ObservableObject {
         // Check for save assistant answer
         for pattern in saveAssistantPatterns {
             if normalized.hasPrefix(pattern) {
-                guard let assistantContent = lastAssistant, !assistantContent.isEmpty else {
-                    print("💾 Save command detected but no assistant answer available")
-                    return nil
-                }
-                
                 // Extract zone hint if present
                 var zoneHint: String? = nil
                 if normalized.contains("in my") {
@@ -158,13 +153,11 @@ class ChatViewModel: ObservableObject {
                     }
                 }
                 
-                // Build title from last user question
-                let title = buildTitleFromQuestion(lastUser ?? "Saved answer")
-                
+                // Send the save command text itself - backend will extract assistant message
                 return SaveCommand(
                     mode: .saveAssistantAnswer,
-                    content: assistantContent,
-                    title: title,
+                    content: text.trim(),  // Send command text, backend will extract
+                    title: text.trim(),    // Send command text, backend will extract
                     zoneHint: zoneHint
                 )
             }
@@ -274,33 +267,24 @@ class ChatViewModel: ObservableObject {
     
     /// Handle simple "Save" command - saves last assistant message
     private func handleSimpleSaveCommand() async {
-        // Get the most recent assistant message
-        guard let lastAssistantMessage = messages.last(where: { !$0.isFromUser }) else {
-            await MainActor.run {
-                let errorMessage = Message(
-                    content: "I don't have anything to save. Please ask me something first.",
-                    isFromUser: false
-                )
-                messages.append(errorMessage)
-                trimMessagesIfNeeded()
-                storageService.saveMessages(messages)
-            }
-            return
+        // Build conversation history for backend to extract assistant message
+        let conversationHistory: [[String: String]] = messages.map { msg in
+            [
+                "role": msg.isFromUser ? "user" : "assistant",
+                "content": msg.content
+            ]
         }
         
-        let assistantContent = lastAssistantMessage.content
-        let title = extractFirstSentence(assistantContent)
-        
-        // Create save command with specific values
+        // Create save command - backend will detect "Save" and extract assistant message
         let saveCommand = SaveCommand(
             mode: .saveUserNote,
-            content: assistantContent,
-            title: title,
-            zoneHint: nil  // Will default to "brain" in backend
+            content: "Save",  // Backend will detect this and extract from conversationHistory
+            title: "Save",    // Backend will detect this and extract from conversationHistory
+            zoneHint: nil
         )
         
-        // Call save function
-        let result = await saveContentToRayItems(command: saveCommand)
+        // Call save function with conversation history
+        let result = await saveContentToRayItems(command: saveCommand, conversationHistory: conversationHistory)
         
         await MainActor.run {
             if result.success {
@@ -326,7 +310,7 @@ class ChatViewModel: ObservableObject {
     }
     
     /// Save content to Ray Items via /api/ray-items endpoint
-    func saveContentToRayItems(command: SaveCommand) async -> (success: Bool, zone: String?, errorMessage: String?) {
+    func saveContentToRayItems(command: SaveCommand, conversationHistory: [[String: String]]? = nil) async -> (success: Bool, zone: String?, errorMessage: String?) {
         print("💾 Saving content to Ray Items")
         print("💾 Mode: \(command.mode == .saveAssistantAnswer ? "assistant_answer" : "user_note")")
         print("💾 Title: \(command.title)")
@@ -350,6 +334,11 @@ class ChatViewModel: ObservableObject {
             "content": command.content,
             "source": source
         ]
+        
+        // Add conversation history if provided (for save command detection)
+        if let conversationHistory = conversationHistory {
+            body["conversationHistory"] = conversationHistory
+        }
         
         // If zoneHint is nil, explicitly set zone, subzone, kind for simple "Save" command
         if let zoneHint = command.zoneHint, !zoneHint.isEmpty {
@@ -485,8 +474,15 @@ class ChatViewModel: ObservableObject {
         // STEP 3: Check for other save commands BEFORE sending to API
         if let saveCommand = parseSaveCommand(messageContent, lastAssistant: lastAssistantAnswer, lastUser: lastUserQuestion) {
             print("💾 Save command detected, skipping OpenAI API call")
+            // Build conversation history for backend
+            let conversationHistory: [[String: String]] = messages.map { msg in
+                [
+                    "role": msg.isFromUser ? "user" : "assistant",
+                    "content": msg.content
+                ]
+            }
             Task {
-                await handleSaveCommand(saveCommand)
+                await handleSaveCommand(saveCommand, conversationHistory: conversationHistory)
             }
             return
         }
@@ -1839,12 +1835,12 @@ class ChatViewModel: ObservableObject {
     }
     
     /// Handle save command - call API and insert confirmation message
-    private func handleSaveCommand(_ command: SaveCommand) async {
+    private func handleSaveCommand(_ command: SaveCommand, conversationHistory: [[String: String]]? = nil) async {
         await MainActor.run {
             isProcessing = true
         }
         
-        let result = await saveContentToRayItems(command: command)
+        let result = await saveContentToRayItems(command: command, conversationHistory: conversationHistory)
         
         await MainActor.run {
             isProcessing = false

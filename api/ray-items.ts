@@ -53,6 +53,42 @@ function mapZoneHint(zoneHint: string | null | undefined): {
   return { zone: 'brain', subzone: 'notes', kind: 'note' };
 }
 
+// Detect if a message is a save command
+function isSaveCommand(text: string): boolean {
+  const normalized = text.toLowerCase().trim();
+  const savePatterns = ['save', 'save that', 'save this'];
+  return savePatterns.some(pattern => normalized === pattern || normalized.startsWith(pattern + ' '));
+}
+
+// Extract first 10-12 words for title
+function extractTitleFromContent(content: string): string {
+  const words = content.trim().split(/\s+/);
+  const wordCount = Math.min(words.length, 12);
+  const title = words.slice(0, wordCount).join(' ');
+  return title + (words.length > wordCount ? '...' : '');
+}
+
+// Find last assistant message from conversation history
+function findLastAssistantMessage(conversationHistory: any[]): string | null {
+  if (!Array.isArray(conversationHistory)) {
+    return null;
+  }
+  
+  // Search backwards through conversation history
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (msg && typeof msg === 'object') {
+      const role = msg.role;
+      const content = msg.content;
+      if (role === 'assistant' && content && typeof content === 'string' && content.trim().length > 0) {
+        return content.trim();
+      }
+    }
+  }
+  
+  return null;
+}
+
 // Classify content based on title and content (fallback when no zoneHint)
 function classifyContent(title: string, content: string): {
   zone: string;
@@ -98,17 +134,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Handle POST requests - create new ray_item
   if (req.method === 'POST') {
     try {
-      const { title, content, zone, subzone, kind, tags, zoneHint, source } = req.body;
+      const { title, content, zone, subzone, kind, tags, zoneHint, source, conversationHistory } = req.body;
+
+      // Check if this is a save command - if so, extract last assistant message
+      let finalTitle = title;
+      let finalContent = content;
+      let isSaveCommandDetected = false;
+
+      if (title && typeof title === 'string' && isSaveCommand(title.trim())) {
+        console.log('💾 Save command detected in title:', title);
+        isSaveCommandDetected = true;
+      } else if (content && typeof content === 'string' && isSaveCommand(content.trim())) {
+        console.log('💾 Save command detected in content:', content);
+        isSaveCommandDetected = true;
+      }
+
+      if (isSaveCommandDetected) {
+        // Find last assistant message from conversation history
+        const lastAssistantMsg = findLastAssistantMessage(conversationHistory || []);
+        
+        if (!lastAssistantMsg) {
+          return res.status(400).json({
+            error: 'Bad request',
+            message: 'Save command detected but no assistant message found in conversation history.'
+          });
+        }
+
+        // Extract title (first 10-12 words) and content (full message)
+        finalTitle = extractTitleFromContent(lastAssistantMsg);
+        finalContent = lastAssistantMsg;
+        
+        console.log('💾 Extracted from assistant message:');
+        console.log('💾 Title:', finalTitle);
+        console.log('💾 Content length:', finalContent.length);
+      }
 
       // Validate input
-      if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      if (!finalTitle || typeof finalTitle !== 'string' || finalTitle.trim().length === 0) {
         return res.status(400).json({
           error: 'Bad request',
           message: 'Invalid or missing "title" field. Must be a non-empty string.'
         });
       }
 
-      if (!content || typeof content !== 'string' || content.trim().length === 0) {
+      if (!finalContent || typeof finalContent !== 'string' || finalContent.trim().length === 0) {
         return res.status(400).json({
           error: 'Bad request',
           message: 'Invalid or missing "content" field. Must be a non-empty string.'
@@ -116,17 +185,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // Validate source
-      const validSource = source === 'assistant_answer' || source === 'user_note'
-        ? source
-        : 'user_note'; // Default to user_note if invalid
+      // If save command detected, always use 'user_note'
+      const validSource = isSaveCommandDetected 
+        ? 'user_note'
+        : (source === 'assistant_answer' || source === 'user_note' ? source : 'user_note');
 
       // Determine zone, subzone, and kind
       let finalZone = 'brain';
       let finalSubzone: string | null = 'notes';
       let finalKind = 'note';
 
+      if (isSaveCommandDetected) {
+        // Use defaults for save command: zone="brain", subzone=null, kind="note"
+        finalZone = 'brain';
+        finalSubzone = null;
+        finalKind = 'note';
+      }
       // If explicit zone/kind provided, use those (highest priority)
-      if (zone && typeof zone === 'string' && zone.trim().length > 0) {
+      else if (zone && typeof zone === 'string' && zone.trim().length > 0) {
         finalZone = zone.trim();
         finalSubzone = (subzone !== undefined && subzone !== null && typeof subzone === 'string' && subzone.trim().length > 0)
           ? subzone.trim()
@@ -144,7 +220,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       // Otherwise, classify based on content
       else {
-        const classified = classifyContent(title.trim(), content.trim());
+        const classified = classifyContent(finalTitle.trim(), finalContent.trim());
         finalZone = classified.zone;
         finalSubzone = classified.subzone;
         finalKind = classified.kind;
@@ -153,7 +229,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Ensure defaults are set
       if (!finalZone) finalZone = 'brain';
       if (!finalKind) finalKind = 'note';
-      if (finalSubzone === undefined) finalSubzone = 'notes';
+      if (finalSubzone === undefined) finalSubzone = isSaveCommandDetected ? null : 'notes';
 
       const finalTags = (tags && typeof tags === 'string' && tags.trim().length > 0)
         ? tags.trim()
@@ -163,8 +239,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data, error } = await supabaseAdmin
         .from('ray_items')
         .insert({
-          title: title.trim(),
-          content: content.trim(),
+          title: finalTitle.trim(),
+          content: finalContent.trim(),
           zone: finalZone,
           subzone: finalSubzone,
           kind: finalKind,
