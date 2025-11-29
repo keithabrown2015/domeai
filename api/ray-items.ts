@@ -125,22 +125,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let finalSubzone: string | null = 'notes';
       let finalKind = 'note';
 
-      // If zoneHint is provided, use it
-      if (zoneHint && typeof zoneHint === 'string' && zoneHint.trim().length > 0) {
-        const mapped = mapZoneHint(zoneHint);
-        finalZone = mapped.zone;
-        finalSubzone = mapped.subzone;
-        finalKind = mapped.kind;
-      }
-      // If explicit zone/kind provided, use those (but still apply defaults if missing)
-      else if (zone && typeof zone === 'string' && zone.trim().length > 0) {
+      // If explicit zone/kind provided, use those (highest priority)
+      if (zone && typeof zone === 'string' && zone.trim().length > 0) {
         finalZone = zone.trim();
-        finalSubzone = (subzone && typeof subzone === 'string' && subzone.trim().length > 0)
+        finalSubzone = (subzone !== undefined && subzone !== null && typeof subzone === 'string' && subzone.trim().length > 0)
           ? subzone.trim()
           : null;
         finalKind = (kind && typeof kind === 'string' && kind.trim().length > 0)
           ? kind.trim()
           : 'note';
+      }
+      // If zoneHint is provided, use it
+      else if (zoneHint && typeof zoneHint === 'string' && zoneHint.trim().length > 0) {
+        const mapped = mapZoneHint(zoneHint);
+        finalZone = mapped.zone;
+        finalSubzone = mapped.subzone;
+        finalKind = mapped.kind;
       }
       // Otherwise, classify based on content
       else {

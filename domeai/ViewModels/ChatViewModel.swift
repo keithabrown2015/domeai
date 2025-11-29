@@ -249,6 +249,82 @@ class ChatViewModel: ObservableObject {
         return String(trimmed.prefix(77)) + "..."
     }
     
+    /// Extract first sentence from text for use as title
+    private func extractFirstSentence(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Try to find sentence endings (. ! ?)
+        let sentenceEndings: [Character] = [".", "!", "?"]
+        
+        for ending in sentenceEndings {
+            if let index = trimmed.firstIndex(of: ending) {
+                let sentence = String(trimmed[...index]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !sentence.isEmpty {
+                    return sentence
+                }
+            }
+        }
+        
+        // Fallback: return first 80 chars if no sentence ending found
+        if trimmed.count <= 80 {
+            return trimmed
+        }
+        return String(trimmed.prefix(77)) + "..."
+    }
+    
+    /// Handle simple "Save" command - saves last assistant message
+    private func handleSimpleSaveCommand() async {
+        // Get the most recent assistant message
+        guard let lastAssistantMessage = messages.last(where: { !$0.isFromUser }) else {
+            await MainActor.run {
+                let errorMessage = Message(
+                    content: "I don't have anything to save. Please ask me something first.",
+                    isFromUser: false
+                )
+                messages.append(errorMessage)
+                trimMessagesIfNeeded()
+                storageService.saveMessages(messages)
+            }
+            return
+        }
+        
+        let assistantContent = lastAssistantMessage.content
+        let title = extractFirstSentence(assistantContent)
+        
+        // Create save command with specific values
+        let saveCommand = SaveCommand(
+            mode: .saveUserNote,
+            content: assistantContent,
+            title: title,
+            zoneHint: nil  // Will default to "brain" in backend
+        )
+        
+        // Call save function
+        let result = await saveContentToRayItems(command: saveCommand)
+        
+        await MainActor.run {
+            if result.success {
+                let confirmationMessage = Message(
+                    content: "I've saved that in your Dome files.",
+                    isFromUser: false
+                )
+                messages.append(confirmationMessage)
+                trimMessagesIfNeeded()
+                storageService.saveMessages(messages)
+                print("✅ Simple save confirmation added to chat")
+            } else {
+                let errorMessage = Message(
+                    content: "I tried to save that, but something went wrong. Please try again later.",
+                    isFromUser: false
+                )
+                messages.append(errorMessage)
+                trimMessagesIfNeeded()
+                storageService.saveMessages(messages)
+                print("❌ Simple save failed, error message added to chat")
+            }
+        }
+    }
+    
     /// Save content to Ray Items via /api/ray-items endpoint
     func saveContentToRayItems(command: SaveCommand) async -> (success: Bool, zone: String?, errorMessage: String?) {
         print("💾 Saving content to Ray Items")
@@ -269,12 +345,21 @@ class ChatViewModel: ObservableObject {
         
         let source = command.mode == .saveAssistantAnswer ? "assistant_answer" : "user_note"
         
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "title": command.title,
             "content": command.content,
-            "source": source,
-            "zoneHint": command.zoneHint as Any
+            "source": source
         ]
+        
+        // If zoneHint is nil, explicitly set zone, subzone, kind for simple "Save" command
+        if let zoneHint = command.zoneHint, !zoneHint.isEmpty {
+            body["zoneHint"] = zoneHint
+        } else {
+            // Explicit defaults for simple "Save" command
+            body["zone"] = "brain"
+            body["subzone"] = NSNull()  // null in JSON
+            body["kind"] = "note"
+        }
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -387,7 +472,17 @@ class ChatViewModel: ObservableObject {
         currentAttachment = nil
         storageService.saveMessages(messages)
         
-        // STEP 2: Check for save command BEFORE sending to API
+        // STEP 2: Check for simple "Save" command (exact match, case insensitive)
+        let normalizedContent = messageContent.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedContent == "save" {
+            print("💾 Simple 'Save' command detected, skipping OpenAI API call")
+            Task {
+                await handleSimpleSaveCommand()
+            }
+            return
+        }
+        
+        // STEP 3: Check for other save commands BEFORE sending to API
         if let saveCommand = parseSaveCommand(messageContent, lastAssistant: lastAssistantAnswer, lastUser: lastUserQuestion) {
             print("💾 Save command detected, skipping OpenAI API call")
             Task {
@@ -396,7 +491,7 @@ class ChatViewModel: ObservableObject {
             return
         }
         
-        // STEP 3: Send to API with FULL conversation history (normal flow)
+        // STEP 4: Send to API with FULL conversation history (normal flow)
         Task {
             await sendMessageToAPI(userMessageContent: messageContent, attachment: attachmentData)
         }
