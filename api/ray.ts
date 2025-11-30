@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { sendRayEmail } from './lib/email/sendRayEmail';
+import { supabaseAdmin } from './lib/supabaseAdmin';
 
 // SHORT-TERM CONVERSATIONAL MEMORY CONSTANTS
 // Ray only remembers the most recent N messages (not entire conversation history)
@@ -26,6 +27,27 @@ function userRequestedEmail(userMessage: string): boolean {
 // Detect if message is a save command
 function isSaveCommand(message: string): boolean {
   const normalized = message.toLowerCase().trim();
+  
+  // Simple save patterns: "save", "save that", "save this", "please save"
+  const simpleSavePatterns = [
+    "save",
+    "save that",
+    "save this",
+    "please save",
+    "save that for me",
+    "save this for me",
+    "please save that",
+    "please save this"
+  ];
+  
+  // Check for simple patterns first (exact match or starts with)
+  for (const pattern of simpleSavePatterns) {
+    if (normalized === pattern || normalized.startsWith(pattern + " ")) {
+      return true;
+    }
+  }
+  
+  // More specific save triggers (existing patterns)
   const saveTriggers = [
     "ray, save this:",
     "save this:",
@@ -50,6 +72,27 @@ function isSaveCommand(message: string): boolean {
   }
   
   return false;
+}
+
+// Find last assistant message from conversation history
+function findLastAssistantMessage(conversationHistory: any[]): string | null {
+  if (!Array.isArray(conversationHistory)) {
+    return null;
+  }
+  
+  // Search backwards through conversation history
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (msg && typeof msg === 'object') {
+      const role = msg.role;
+      const content = msg.content;
+      if (role === 'assistant' && content && typeof content === 'string' && content.trim().length > 0) {
+        return content.trim();
+      }
+    }
+  }
+  
+  return null;
 }
 
 // Extract content from save command by stripping trigger phrase
@@ -391,57 +434,66 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.log('💾 Save command detected:', userQuery.substring(0, 100));
       
       try {
-        // Step 1: Extract content
-        const rawContent = extractSaveContent(userQuery);
-        console.log('💾 Extracted content:', rawContent.substring(0, 100));
+        // Step 1: Find last assistant message from conversation history
+        const lastAssistantMsg = findLastAssistantMessage(conversationHistory || []);
         
-        // Step 2: Classify item
-        const classification = classifySavedItem(rawContent);
-        console.log('💾 Classification:', classification);
-        
-        // Step 3: Build title
-        const title = buildTitleFromContent(rawContent);
-        
-        // Step 4: Call /api/ray-items
-        // Construct URL from request headers or environment
-        const host = req.headers.host || 'localhost:3000';
-        const protocol = host.includes('localhost') ? 'http' : 'https';
-        const baseUrl = `${protocol}://${host}`;
-        
-        const saveResponse = await fetch(`${baseUrl}/api/ray-items`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            title,
-            content: rawContent.trim(),
-            zone: classification.zone,
-            subzone: classification.subzone,
-            kind: classification.kind
-          })
-        });
-        
-        if (!saveResponse.ok) {
-          const errorText = await saveResponse.text();
-          console.error('❌ Save failed:', saveResponse.status, errorText);
+        if (!lastAssistantMsg) {
+          console.error('❌ Save command detected but no assistant message found in conversation history');
           return res.status(200).json({
             ok: true,
             tier: 0,
             model: 'dome-zones',
-            message: "I tried to save that into your Dome Zones but ran into a storage error. Please try again in a moment.",
-            reasoning: 'Save command detected but storage failed',
+            message: "I'd like to save that for you, but I don't see anything to save from our recent conversation. Could you ask me something first, then ask me to save my response?",
+            reasoning: 'Save command detected but no assistant message found',
             sources: [],
             extractedPersonalDetails: undefined
           });
         }
         
-        const savedItem = await saveResponse.json();
-        console.log('✅ Item saved:', savedItem.id);
+        // Step 2: Use the last assistant message as content to save
+        const contentToSave = lastAssistantMsg;
+        console.log('💾 Content to save (length):', contentToSave.length);
         
-        // Step 5: Return branded success message
+        // Step 3: Build title from first part of content (max 60 chars)
+        const title = buildTitleFromContent(contentToSave);
+        console.log('💾 Title:', title);
+        
+        // Step 4: Classify item (optional, defaults to brain zone)
+        const classification = classifySavedItem(contentToSave);
+        console.log('💾 Classification:', classification);
+        
+        // Step 5: Insert directly into Supabase
+        const { data, error } = await supabaseAdmin
+          .from('ray_items')
+          .insert({
+            title: title.trim(),
+            content: contentToSave.trim(),
+            zone: classification.zone,
+            subzone: classification.subzone,
+            kind: classification.kind,
+            source: 'assistant_answer'
+          })
+          .select()
+          .single();
+        
+        if (error) {
+          console.error('❌ Supabase insert error when trying to save item:', error);
+          return res.status(200).json({
+            ok: true,
+            tier: 0,
+            model: 'dome-zones',
+            message: "I tried to save that, but something went wrong. Please try again later.",
+            reasoning: 'Save command detected but Supabase insert failed',
+            sources: [],
+            extractedPersonalDetails: undefined
+          });
+        }
+        
+        console.log('✅ Item saved successfully to Supabase:', data.id);
+        
+        // Step 6: Return success message
         const zoneLabel = getZoneLabel(classification.zone);
-        const successMessage = `Got it — I saved that in your ${zoneLabel} zone.`;
+        const successMessage = `Got it — I've saved that for you in your ${zoneLabel}.`;
         
         return res.status(200).json({
           ok: true,
@@ -459,7 +511,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ok: true,
           tier: 0,
           model: 'dome-zones',
-          message: "I tried to save that into your Dome Zones but ran into a storage error. Please try again in a moment.",
+          message: "I tried to save that, but something went wrong. Please try again later.",
           reasoning: 'Save command detected but processing failed',
           sources: [],
           extractedPersonalDetails: undefined
