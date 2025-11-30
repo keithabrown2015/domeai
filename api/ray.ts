@@ -75,23 +75,31 @@ function isSaveCommand(message: string): boolean {
 }
 
 // Find last assistant message from conversation history
+// Returns the MOST RECENT assistant message (searches backwards from the end)
 function findLastAssistantMessage(conversationHistory: any[]): string | null {
   if (!Array.isArray(conversationHistory)) {
+    console.log('💾 findLastAssistantMessage: conversationHistory is not an array');
     return null;
   }
   
-  // Search backwards through conversation history
+  console.log('💾 findLastAssistantMessage: searching through', conversationHistory.length, 'messages');
+  
+  // Search backwards through conversation history to find the MOST RECENT assistant message
   for (let i = conversationHistory.length - 1; i >= 0; i--) {
     const msg = conversationHistory[i];
     if (msg && typeof msg === 'object') {
       const role = msg.role;
       const content = msg.content;
       if (role === 'assistant' && content && typeof content === 'string' && content.trim().length > 0) {
-        return content.trim();
+        const trimmedContent = content.trim();
+        console.log('💾 findLastAssistantMessage: found assistant message at index', i, 'length:', trimmedContent.length);
+        console.log('💾 findLastAssistantMessage: preview:', trimmedContent.substring(0, 100));
+        return trimmedContent;
       }
     }
   }
   
+  console.log('💾 findLastAssistantMessage: no assistant message found');
   return null;
 }
 
@@ -432,9 +440,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // DOME ZONES: Check for save commands BEFORE OpenAI processing
     if (isSaveCommand(userQuery)) {
       console.log('💾 Save command detected:', userQuery.substring(0, 100));
+      console.log('💾 conversationHistory length:', (conversationHistory || []).length);
       
       try {
-        // Step 1: Find last assistant message from conversation history
+        // Step 1: Find the MOST RECENT assistant message from conversation history
+        // This should be the latest response Ray just gave to the user
         const lastAssistantMsg = findLastAssistantMessage(conversationHistory || []);
         
         if (!lastAssistantMsg) {
@@ -451,28 +461,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         
         // Step 2: Use the last assistant message as content to save
+        // This is the FULL text of the latest assistant answer
         const contentToSave = lastAssistantMsg;
         console.log('💾 Content to save (length):', contentToSave.length);
+        console.log('💾 Content to save (preview):', contentToSave.substring(0, 200));
         
         // Step 3: Build title from first part of content (max 60 chars)
+        // Alternatively, we could use the user's query, but using content preview is more descriptive
         const title = buildTitleFromContent(contentToSave);
         console.log('💾 Title:', title);
         
-        // Step 4: Classify item (optional, defaults to brain zone)
+        // Step 4: Classify item (defaults to brain zone and note kind)
         const classification = classifySavedItem(contentToSave);
         console.log('💾 Classification:', classification);
         
-        // Step 5: Insert directly into Supabase
+        // Step 5: Insert directly into Supabase with ALL required fields
+        // Ensure we're using the LATEST assistant message, not stale data
+        const insertPayload = {
+          title: title.trim(),
+          content: contentToSave.trim(), // Full text of latest assistant answer
+          zone: classification.zone || 'brain', // Default to 'brain'
+          subzone: classification.subzone || null,
+          kind: classification.kind || 'note', // Default to 'note'
+          source: 'assistant_answer', // Ray is saving his own answer
+          last_ai_message: contentToSave.trim() // Same as content for now
+        };
+        
+        console.log('💾 Insert payload:', {
+          title: insertPayload.title.substring(0, 60),
+          content_length: insertPayload.content.length,
+          zone: insertPayload.zone,
+          kind: insertPayload.kind,
+          source: insertPayload.source,
+          last_ai_message_length: insertPayload.last_ai_message.length
+        });
+        
         const { data, error } = await supabaseAdmin
           .from('ray_items')
-          .insert({
-            title: title.trim(),
-            content: contentToSave.trim(),
-            zone: classification.zone,
-            subzone: classification.subzone,
-            kind: classification.kind,
-            source: 'assistant_answer'
-          })
+          .insert(insertPayload)
           .select()
           .single();
         
@@ -490,9 +516,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         
         console.log('✅ Item saved successfully to Supabase:', data.id);
+        console.log('✅ Saved content preview:', data.content?.substring(0, 100));
         
         // Step 6: Return success message
-        const zoneLabel = getZoneLabel(classification.zone);
+        const zoneLabel = getZoneLabel(classification.zone || 'brain');
         const successMessage = `Got it — I've saved that for you in your ${zoneLabel}.`;
         
         return res.status(200).json({
