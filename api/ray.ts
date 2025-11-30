@@ -28,6 +28,9 @@ function userRequestedEmail(userMessage: string): boolean {
 function isSaveCommand(message: string): boolean {
   const normalized = message.toLowerCase().trim();
   
+  // Remove common prefixes like "yes,", "okay,", "sure,", "yeah," etc.
+  const cleaned = normalized.replace(/^(yes|okay|ok|sure|yeah|yep|alright|all right)[,\s]+/i, '').trim();
+  
   // Simple save patterns: "save", "save that", "save this", "please save"
   const simpleSavePatterns = [
     "save",
@@ -40,7 +43,14 @@ function isSaveCommand(message: string): boolean {
     "please save this"
   ];
   
-  // Check for simple patterns first (exact match or starts with)
+  // Check cleaned version first (handles "yes, save that for me")
+  for (const pattern of simpleSavePatterns) {
+    if (cleaned === pattern || cleaned.startsWith(pattern + " ")) {
+      return true;
+    }
+  }
+  
+  // Check original normalized version (handles direct "save" commands)
   for (const pattern of simpleSavePatterns) {
     if (normalized === pattern || normalized.startsWith(pattern + " ")) {
       return true;
@@ -65,8 +75,8 @@ function isSaveCommand(message: string): boolean {
   for (const trigger of saveTriggers) {
     const triggerLower = trigger.toLowerCase();
     // Remove leading "ray," if present for comparison
-    const cleaned = normalized.replace(/^ray,\s*/i, '').trim();
-    if (cleaned.startsWith(triggerLower) || normalized.startsWith(triggerLower)) {
+    const finalCleaned = cleaned.replace(/^ray,\s*/i, '').trim();
+    if (finalCleaned.startsWith(triggerLower) || cleaned.startsWith(triggerLower) || normalized.startsWith(triggerLower)) {
       return true;
     }
   }
@@ -487,23 +497,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           last_ai_message: contentToSave.trim() // Same as content for now
         };
         
-        console.log('💾 Insert payload:', {
-          title: insertPayload.title.substring(0, 60),
-          content_length: insertPayload.content.length,
-          zone: insertPayload.zone,
-          kind: insertPayload.kind,
-          source: insertPayload.source,
-          last_ai_message_length: insertPayload.last_ai_message.length
-        });
+        // CRITICAL: Log the FULL payload being sent to Supabase
+        console.log('💾 ===== SUPABASE INSERT ATTEMPT =====');
+        console.log('💾 Insert payload (FULL):', JSON.stringify(insertPayload, null, 2));
+        console.log('💾 Title:', insertPayload.title);
+        console.log('💾 Content length:', insertPayload.content.length);
+        console.log('💾 Content preview:', insertPayload.content.substring(0, 200));
+        console.log('💾 Zone:', insertPayload.zone);
+        console.log('💾 Subzone:', insertPayload.subzone);
+        console.log('💾 Kind:', insertPayload.kind);
+        console.log('💾 Source:', insertPayload.source);
+        console.log('💾 Last AI message length:', insertPayload.last_ai_message.length);
+        console.log('💾 ====================================');
         
+        // CRITICAL: Await the insert and check for errors
         const { data, error } = await supabaseAdmin
           .from('ray_items')
           .insert(insertPayload)
           .select()
           .single();
         
+        // CRITICAL: Only claim success if insert actually succeeded
         if (error) {
-          console.error('❌ Supabase insert error when trying to save item:', error);
+          console.error('❌ ===== SUPABASE INSERT FAILED =====');
+          console.error('❌ Error code:', error.code);
+          console.error('❌ Error message:', error.message);
+          console.error('❌ Error details:', JSON.stringify(error, null, 2));
+          console.error('❌ ====================================');
           return res.status(200).json({
             ok: true,
             tier: 0,
@@ -515,10 +535,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           });
         }
         
-        console.log('✅ Item saved successfully to Supabase:', data.id);
-        console.log('✅ Saved content preview:', data.content?.substring(0, 100));
+        // CRITICAL: Verify we got data back before claiming success
+        if (!data || !data.id) {
+          console.error('❌ ===== SUPABASE INSERT RETURNED NO DATA =====');
+          console.error('❌ Response data:', JSON.stringify(data, null, 2));
+          console.error('❌ ====================================');
+          return res.status(200).json({
+            ok: true,
+            tier: 0,
+            model: 'dome-zones',
+            message: "I tried to save that, but something went wrong. Please try again later.",
+            reasoning: 'Save command detected but Supabase insert returned no data',
+            sources: [],
+            extractedPersonalDetails: undefined
+          });
+        }
         
-        // Step 6: Return success message
+        console.log('✅ ===== SUPABASE INSERT SUCCEEDED =====');
+        console.log('✅ Item saved successfully to Supabase');
+        console.log('✅ Saved item ID:', data.id);
+        console.log('✅ Saved title:', data.title);
+        console.log('✅ Saved content preview:', data.content?.substring(0, 100));
+        console.log('✅ Saved zone:', data.zone);
+        console.log('✅ ====================================');
+        
+        // Step 6: Return success message ONLY after confirmed successful insert
         const zoneLabel = getZoneLabel(classification.zone || 'brain');
         const successMessage = `Got it — I've saved that for you in your ${zoneLabel}.`;
         
