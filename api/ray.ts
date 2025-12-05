@@ -22,46 +22,40 @@ function userRequestedEmail(userMessage: string): boolean {
   );
 }
 
-// Helper function to detect if query needs web search for recent/current information
-function shouldUseWebSearch(message: string): boolean {
-  const m = message.toLowerCase();
-  return (
-    m.includes("today") ||
-    m.includes("yesterday") ||
-    m.includes("this week") ||
-    m.includes("score") ||
-    m.includes("game") ||
-    m.includes("stock price") ||
-    m.includes("news") ||
-    m.includes("weather") ||
-    m.includes("what happened") ||
-    m.includes("current") ||
-    m.includes("latest") ||
-    m.includes("recent") ||
-    m.includes("now") ||
-    m.includes("population") ||
-    m.includes("rankings") ||
-    m.includes("poll")
-  );
-}
-
-// Helper function to answer user question with optional web search using OpenAI Responses API
-async function answerUserQuestionWithOptionalWebSearch(
+// Helper function to answer user question ALWAYS using OpenAI Responses API with web_search tool
+async function answerUserQuestionWithWebSearch(
   userMessage: string,
   conversationHistory: ChatMessage[] | undefined,
   systemPrompt: string,
   openaiApiKey: string,
-  extractContentFn: (responseData: any) => string
-): Promise<{ message: string; sources: string[]; searchPerformed: boolean }> {
-  const needsWeb = shouldUseWebSearch(userMessage);
-  
-  if (needsWeb) {
-    console.log('🌐 Web search needed for query:', userMessage.substring(0, 100));
-  }
+  model: string = 'gpt-4o'
+): Promise<{ message: string; sources: string[] }> {
+  console.log("Ray called OpenAI with web_search for this message:", userMessage.substring(0, 100));
 
-  // Try OpenAI Responses API first (if available), fallback to Chat Completions with web search instructions
+  // ALWAYS use Responses API with web_search tool
   try {
-    // Attempt to use Responses API with web_search tool
+    // Build input array with system prompt and conversation history
+    const inputMessages: Array<{ role: string; content: string }> = [];
+    
+    // Add system prompt if provided
+    if (systemPrompt) {
+      inputMessages.push({
+        role: 'system',
+        content: systemPrompt
+      });
+    }
+    
+    // Add conversation history
+    if (conversationHistory && conversationHistory.length > 0) {
+      inputMessages.push(...conversationHistory);
+    }
+    
+    // Add current user message
+    inputMessages.push({
+      role: 'user',
+      content: userMessage
+    });
+    
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
@@ -69,15 +63,9 @@ async function answerUserQuestionWithOptionalWebSearch(
         'Authorization': `Bearer ${openaiApiKey}`
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
-        tools: needsWeb ? [{ type: 'web_search' }] : [],
-        input: [
-          ...(conversationHistory || []),
-          {
-            role: 'user',
-            content: userMessage
-          }
-        ]
+        model: model,
+        tools: [{ type: 'web_search' }],
+        input: inputMessages
       })
     });
 
@@ -88,62 +76,58 @@ async function answerUserQuestionWithOptionalWebSearch(
       if (output) {
         const text = output.type === 'output_text' ? output.text : JSON.stringify(output);
         const sources = responseData.sources || [];
-        console.log('✅ OpenAI Responses API with web search completed');
-        return { message: text, sources, searchPerformed: needsWeb };
+        console.log('✅ OpenAI Responses API with web_search completed');
+        return { message: text, sources };
       }
     }
+    
+    // If Responses API returned non-OK, throw to fallback
+    const errorText = await response.text();
+    throw new Error(`Responses API returned ${response.status}: ${errorText}`);
   } catch (error) {
-    console.log('⚠️ Responses API not available, using Chat Completions with web search instructions');
-  }
+    console.log('⚠️ Responses API not available, falling back to Chat Completions');
+    console.error('Error:', error);
+    
+    // Fallback: Use Chat Completions API (but this won't have web_search)
+    const messages = buildChatMessages({
+      systemPrompt: systemPrompt + '\n\nIMPORTANT: Use current, up-to-date information from web sources when answering.',
+      conversationHistory,
+      newUserMessage: userMessage
+    });
 
-  // Fallback: Use Chat Completions API with web search instructions in system prompt
-  const webSearchInstruction = needsWeb 
-    ? '\n\nIMPORTANT: This query requires current/recent information. Use your knowledge of current events, recent news, and up-to-date information to answer. If you have access to web search capabilities, use them to find the most current information.'
-    : '';
+    const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiApiKey}`
+      },
+      body: JSON.stringify({
+        model: model,
+        messages,
+        temperature: 0.7,
+        max_tokens: 2000
+      })
+    });
 
-  const enhancedSystemPrompt = systemPrompt + webSearchInstruction;
+    if (!chatResponse.ok) {
+      const errorText = await chatResponse.text();
+      throw new Error(`OpenAI API error: ${chatResponse.status} - ${errorText}`);
+    }
 
-  const messages = buildChatMessages({
-    systemPrompt: enhancedSystemPrompt,
-    conversationHistory,
-    newUserMessage: userMessage
-  });
-
-  const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openaiApiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o',
-      messages,
-      temperature: 0.7,
-      max_tokens: 2000
-    })
-  });
-
-  if (!chatResponse.ok) {
-    const errorText = await chatResponse.text();
-    throw new Error(`OpenAI API error: ${chatResponse.status} - ${errorText}`);
-  }
-
-  const chatData = await chatResponse.json();
-  const message = extractContentFn(chatData);
-  
-  // Extract sources from response if available (OpenAI may include citations)
-  const sources: string[] = [];
-  if (needsWeb) {
+    const chatData = await chatResponse.json();
+    const message = extractContent(chatData);
+    
     // Try to extract URLs from the response text
+    const sources: string[] = [];
     const urlRegex = /https?:\/\/[^\s]+/g;
     const matches = message.match(urlRegex);
     if (matches) {
-      sources.push(...matches.slice(0, 5)); // Limit to 5 sources
+      sources.push(...matches.slice(0, 5));
     }
-  }
 
-  console.log(needsWeb ? '✅ Web search response generated' : '✅ Standard response generated');
-  return { message, sources, searchPerformed: needsWeb };
+    console.log('✅ Fallback Chat Completions response generated');
+    return { message, sources };
+  }
 }
 
 // DOME ZONES: Helper functions for save command detection and classification
@@ -816,10 +800,9 @@ Be decisive and choose the most appropriate tier.`
     let sources: string[] = [];
     let extractedPersonalDetails: any[] = []; // New personal facts extracted from conversation
     
-    // TIER 1: Simple queries with gpt-4o-mini
+    // TIER 1: Simple queries with gpt-4o-mini (ALWAYS with web_search)
     if (tier === 1) {
-      console.log('🤖 Tier 1: Using gpt-4o-mini');
-      sources = [];
+      console.log('🤖 Tier 1: Using gpt-4o-mini with web_search');
       model = 'gpt-4o-mini';
       
       // Build system prompt with userProfile
@@ -874,46 +857,21 @@ REMEMBER:
 
 You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
 
-      // Build messages array using sliding window helper
-      const tier1Messages = buildChatMessages({
+      const result = await answerUserQuestionWithWebSearch(
+        userQuery,
+        conversationHistoryArray,
         systemPrompt,
-        conversationHistory: conversationHistoryArray,
-        newUserMessage: userQuery
-      });
-
-      // Log trimming verification
-      console.log("[ray] conversationHistory length:", conversationHistoryArray?.length ?? 0);
-      console.log("[ray] messages sent to OpenAI:", tier1Messages.length);
-
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiApiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: tier1Messages,  // This includes system prompt + sliding window (last MAX_HISTORY_MESSAGES)
-          temperature: 0.7,
-          max_tokens: 1000
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Tier 1 OpenAI error:', response.status, errorText);
-        throw new Error(`OpenAI API error: ${response.status}`);
-      }
-
-      const responseData = await response.json();
-      message = extractContent(responseData);
-      console.log('✅ Tier 1 response generated');
-      console.log('🔍 DEBUG: OpenAI response received');
+        openaiApiKey,
+        'gpt-4o-mini'
+      );
+      
+      message = result.message;
+      sources = result.sources;
+      console.log('✅ Tier 1 response generated with web_search');
     }
-    // TIER 2: Complex queries with gpt-4o
+    // TIER 2: Complex queries with gpt-4o (ALWAYS with web_search)
     else if (tier === 2) {
-      console.log('🤖 Tier 2: Using gpt-4o');
-      sources = [];
+      console.log('🤖 Tier 2: Using gpt-4o with web_search');
       model = 'gpt-4o';
       
       // Build system prompt with userProfile
@@ -970,45 +928,21 @@ REMEMBER:
 
 You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
 
-      // Build messages array using sliding window helper
-      const tier2Messages = buildChatMessages({
-        systemPrompt: tier2SystemPrompt,
-        conversationHistory: conversationHistoryArray,
-        newUserMessage: userQuery
-      });
-
-      // Log trimming verification
-      console.log("[ray] conversationHistory length:", conversationHistoryArray?.length ?? 0);
-      console.log("[ray] messages sent to OpenAI:", tier2Messages.length);
-
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiApiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o',
-          messages: tier2Messages,
-          temperature: 0.7,
-          max_tokens: 2000
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Tier 2 OpenAI error:', response.status, errorText);
-        throw new Error(`OpenAI API error: ${response.status}`);
-      }
-
-      const responseData = await response.json();
-      message = extractContent(responseData);
-      console.log('✅ Tier 2 response generated');
-      console.log('🔍 DEBUG: OpenAI response received');
+      const result = await answerUserQuestionWithWebSearch(
+        userQuery,
+        conversationHistoryArray,
+        tier2SystemPrompt,
+        openaiApiKey,
+        'gpt-4o'
+      );
+      
+      message = result.message;
+      sources = result.sources;
+      console.log('✅ Tier 2 response generated with web_search');
     }
-    // TIER 3: OpenAI Web Search + gpt-4o
+    // TIER 3: OpenAI Web Search + gpt-4o (ALWAYS with web_search)
     else if (tier === 3) {
-      console.log('🔍 Tier 3: Using OpenAI Web Search + gpt-4o');
+      console.log('🔍 Tier 3: Using OpenAI Web Search + gpt-4o with web_search');
       model = 'openai-web-search';
       
       // Build system prompt with userProfile
@@ -1065,113 +999,18 @@ REMEMBER:
 
 You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context.`;
 
-      try {
-        const webSearchResult = await answerUserQuestionWithOptionalWebSearch(
-          userQuery,
-          conversationHistoryArray,
-          tier3SystemPrompt,
-          openaiApiKey,
-          extractContent
-        );
-        
-        message = webSearchResult.message;
-        sources = webSearchResult.sources;
-        
-        if (webSearchResult.searchPerformed) {
-          console.log('✅ Tier 3 response generated with web search');
-          console.log('🔍 Web search sources:', sources.length);
-        } else {
-          console.log('✅ Tier 3 response generated (web search not needed)');
-        }
-      } catch (error: any) {
-        console.error('❌ Tier 3 web search error:', error.message);
-        // Fallback to standard Tier 2 response
-        model = 'gpt-4o';
-        sources = [];
-        
-        const fallbackUserProfileSection = formatUserProfile(userProfile);
-        const fallbackSystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI.${fallbackUserProfileSection}
-
-Answer the query, noting that web search is temporarily unavailable.
-
-EMAIL CAPABILITY: Ray can send emails to the user via the backend when requested. If the user asks to "email that" or "send this to my email", the server logic will automatically send the assistant's reply by email. Ray should NOT say he cannot send emails; he should just respond normally, while the backend sends the email.
-
-CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
-
-REQUIRED RESPONSE STRUCTURE (MANDATORY):
-
-1. DIRECT ANSWER (exactly 1-2 sentences)
-   Start with your main point immediately. Be clear and confident.
-
-2. HELPFUL BREAKDOWN (exactly 3-6 bullet points - REQUIRED)
-   You MUST include bullet points. Format them with "- " or "• " at the start of each line.
-   Provide useful details, practical examples, and concrete information.
-   DO NOT skip this section. Bullets are mandatory, not optional.
-
-3. LIGHT PERSONALITY (exactly 1 sentence)
-   Add a warm, human touch. Be slightly playful when appropriate.
-   This should feel natural and friendly, not scripted.
-
-4. FOLLOW-UP QUESTION (exactly 1 sentence)
-   End with a question that keeps the conversation flowing.
-
-EXAMPLE OF CORRECT FORMAT:
-User: "What do you think about bulletproof vests?"
-
-Ray replies:
-"Bulletproof vests are extremely effective when used in the right situations, and they've saved countless lives — but they're not magic armor.
-
-Key Points:
-- They protect against handgun rounds, not rifles unless you're using higher-level plates
-- Soft vests are lighter but only stop lower-velocity rounds
-- Hard plates add a ton of weight but provide real stopping power
-- Heat, mobility, and comfort are major trade-offs
-- Fit and plate placement matter more than people think
-
-Think of them like seatbelts — lifesavers, but only when you understand their limits.
-
-What angle are you looking at — personal safety, law enforcement, or just curiosity?"
-
-REMEMBER:
-- ALWAYS include bullet points (section 2). Never skip them.
-- ALWAYS include a personality sentence (section 3). Never skip it.
-- ALWAYS include a follow-up question (section 4). Never skip it.
-- Format bullets with "- " or "• " prefix.
-- NO emojis, NO robotic language, NO "As an AI model..." phrasing.
-- Sound like a knowledgeable friend who's in your corner.
-
-You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context.`;
-
-        const fallbackMessages = buildChatMessages({
-          systemPrompt: fallbackSystemPrompt,
-          conversationHistory: conversationHistoryArray,
-          newUserMessage: `${userQuery}\n\nNote: Web search is temporarily unavailable. Answering from my knowledge instead.`
-        });
-
-        const fallbackResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${openaiApiKey}`
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o',
-            messages: fallbackMessages,
-            temperature: 0.7,
-            max_tokens: 2000
-          })
-        });
-
-        if (!fallbackResponse.ok) {
-          const errorText = await fallbackResponse.text();
-          console.error('❌ Tier 3 fallback error:', fallbackResponse.status, errorText);
-          throw new Error(`OpenAI API error: ${fallbackResponse.status}`);
-        }
-
-        const fallbackData = await fallbackResponse.json();
-        message = extractContent(fallbackData);
-        console.log('✅ Tier 3 fallback response generated');
-      }
+      const result = await answerUserQuestionWithWebSearch(
+        userQuery,
+        conversationHistoryArray,
+        tier3SystemPrompt,
+        openaiApiKey,
+        'gpt-4o'
+      );
+      
+      message = result.message;
+      sources = result.sources;
+      console.log('✅ Tier 3 response generated with web_search');
+      console.log('🔍 Web search sources:', sources.length);
     } else {
       // Invalid tier, default to Tier 1
       console.log('⚠️ Invalid tier, defaulting to Tier 1');
