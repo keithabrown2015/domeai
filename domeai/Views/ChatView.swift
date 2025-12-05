@@ -26,26 +26,7 @@ struct ChatView: View {
                         // Main chat area
                         ScrollViewReader { proxy in
                             ScrollView {
-                                VStack(spacing: 8) {
-                                    // Scroll position detector at top (visually bottom)
-                                    GeometryReader { geo -> Color in
-                                        let frame = geo.frame(in: .global)
-                                        // With inverted scroll, when user scrolls up, this detector moves down
-                                        // Show button when detector is below screen (user scrolled up)
-                                        let isScrolledUp = frame.minY > UIScreen.main.bounds.height + 200
-                                        
-                                        DispatchQueue.main.async {
-                                            if showScrollButton != isScrolledUp {
-                                                withAnimation(.easeInOut(duration: 0.2)) {
-                                                    showScrollButton = isScrolledUp
-                                                }
-                                            }
-                                        }
-                                        
-                                        return Color.clear
-                                    }
-                                    .frame(height: 1)
-                                    
+                                LazyVStack(spacing: 8) {
                                     ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
                                         MessageWithTimestampView(
                                             message: message,
@@ -53,41 +34,60 @@ struct ChatView: View {
                                             maxWidth: geometry.size.width * 0.75
                                         )
                                         .id(message.id)
-                                        .rotationEffect(.degrees(180))
                                     }
                                     
                                     if viewModel.isProcessing {
                                         TypingIndicatorBubble()
                                             .id("thinking")
                                             .transition(.opacity.combined(with: .scale))
-                                            .rotationEffect(.degrees(180))
                                     }
+                                    
+                                    // Bottom anchor - invisible spacer at the end with scroll detection
+                                    GeometryReader { geo -> Color in
+                                        let frame = geo.frame(in: .global)
+                                        // Check if bottom anchor is visible (within screen bounds)
+                                        let isVisible = frame.minY < UIScreen.main.bounds.height && frame.maxY > 0
+                                        
+                                        DispatchQueue.main.async {
+                                            // Show button when bottom anchor is NOT visible (user scrolled up)
+                                            if showScrollButton != !isVisible {
+                                                withAnimation(.easeInOut(duration: 0.2)) {
+                                                    showScrollButton = !isVisible
+                                                }
+                                            }
+                                        }
+                                        
+                                        return Color.clear
+                                    }
+                                    .frame(height: 1)
+                                    .id("bottomAnchor")
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
                             }
-                            .rotationEffect(.degrees(180))
                             .onAppear {
-                                // Ensure we start at bottom when view appears
-                                if let firstMessage = viewModel.messages.first {
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        proxy.scrollTo(firstMessage.id, anchor: .top)
-                                    }
+                                // Scroll to bottom anchor when view appears - multiple attempts to ensure it works
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
                                 }
                             }
                             .onChange(of: viewModel.messages.count) { _, _ in
                                 // Auto-scroll to bottom when new message arrives
-                                if let firstMessage = viewModel.messages.first {
-                                    withAnimation(.easeOut(duration: 0.2)) {
-                                        proxy.scrollTo(firstMessage.id, anchor: .top)
-                                    }
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
                                 }
                             }
                             .onChange(of: viewModel.isProcessing) { _, isProcessing in
                                 if isProcessing {
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         withAnimation {
-                                            proxy.scrollTo("thinking", anchor: .top)
+                                            proxy.scrollTo("thinking", anchor: .bottom)
                                         }
                                     }
                                 }
@@ -95,10 +95,8 @@ struct ChatView: View {
                             .overlay(alignment: .bottom) {
                                 if showScrollButton {
                                     Button(action: {
-                                        if let firstMessage = viewModel.messages.first {
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                                proxy.scrollTo(firstMessage.id, anchor: .top)
-                                            }
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                            proxy.scrollTo("bottomAnchor", anchor: .bottom)
                                         }
                                     }) {
                                         ZStack {
@@ -627,7 +625,6 @@ private struct TypingDot: View {
         }
     }
 }
-
 
 #Preview {
     ChatView()
