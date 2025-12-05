@@ -115,6 +115,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const userQuery = query;
 
+    // TEMPORARY: test that the app is really calling /api/ray-live
+    if (true) {
+      return res.status(200).json({
+        ok: true,
+        tier: 3,
+        model: 'ray-live-test',
+        message: 'RAY-LIVE ENDPOINT TEST RESPONSE',
+        reasoning: 'Temporary test response from /api/ray-live',
+        sources: []
+      });
+    }
+
     // Check for OpenAI API key
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) {
