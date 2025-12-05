@@ -66,6 +66,12 @@ struct ChatView: View {
                                     scrollToBottom(proxy: proxy, animated: true)
                                 }
                             }
+                            // Scroll to bottom when messages finish loading from storage
+                            .onChange(of: viewModel.scrollToBottomTrigger) { _, _ in
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                    scrollToBottom(proxy: proxy, animated: false)
+                                }
+                            }
                             // Extra insurance: scroll after a delay to handle async message loading
                             .task {
                                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds

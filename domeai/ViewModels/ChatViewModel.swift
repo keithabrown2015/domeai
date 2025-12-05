@@ -37,6 +37,7 @@ class ChatViewModel: ObservableObject {
     @Published var showingSourcesSheet = false
     @Published var selectedMessageSources: [MessageSource] = []
     @Published var isRefreshing: Bool = false
+    @Published var scrollToBottomTrigger: UUID = UUID()
     
     // MARK: - Save Command Tracking
     /// Track last user question and last assistant answer for save commands
@@ -82,6 +83,11 @@ class ChatViewModel: ObservableObject {
         if loadedMessages.count > 0 {
             print("📂 First message: \(loadedMessages.first?.content.prefix(50) ?? "unknown")")
             print("📂 Last message: \(loadedMessages.last?.content.prefix(50) ?? "unknown")")
+        }
+        
+        // Signal that messages are loaded and view should scroll to bottom
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.scrollToBottomTrigger = UUID()
         }
     }
     
