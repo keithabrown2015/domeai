@@ -87,18 +87,22 @@ function formatUserProfile(userProfile: string | undefined): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Only accept POST requests
-  if (req.method !== 'POST') {
-    return res.status(405).json({ 
-      error: 'Method not allowed', 
-      message: 'Only POST requests are accepted' 
-    });
-  }
-
   // NOTE: /api/ray-live does NOT require X-App-Token for easy testing
   // This is intentional - /api/ray still requires it for production use
 
   try {
+    // Only accept POST requests
+    if (req.method !== 'POST') {
+      return res.status(405).json({
+        ok: false,
+        tier: 3,
+        model: 'ray-live-error',
+        message: 'Only POST requests are accepted',
+        reasoning: null,
+        sources: []
+      });
+    }
+
     console.log('🌐 ray-live: Received request');
     console.log('🌐 ray-live: conversationHistory:', JSON.stringify(req.body.conversationHistory || [], null, 2));
     console.log('🌐 ray-live: query:', req.body.query);
@@ -107,33 +111,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { query, conversationHistory, userProfile } = req.body;
 
     if (!query || typeof query !== 'string') {
-      return res.status(400).json({ 
-        error: 'Bad request', 
-        message: 'Missing or invalid "query" field in request body' 
+      return res.status(400).json({
+        ok: false,
+        tier: 3,
+        model: 'ray-live-error',
+        message: 'Missing or invalid "query" field in request body',
+        reasoning: null,
+        sources: []
       });
     }
 
     const userQuery = query;
 
-    // TEMPORARY: test that the app is really calling /api/ray-live
-    if (true) {
-      return res.status(200).json({
-        ok: true,
-        tier: 3,
-        model: 'ray-live-test',
-        message: 'RAY-LIVE ENDPOINT TEST RESPONSE',
-        reasoning: 'Temporary test response from /api/ray-live',
-        sources: []
-      });
-    }
-
     // Check for OpenAI API key
     const openaiApiKey = process.env.OPENAI_API_KEY;
     if (!openaiApiKey) {
       console.error('❌ OPENAI_API_KEY not found in environment variables');
-      return res.status(500).json({ 
-        error: 'Server configuration error', 
-        message: 'OpenAI API key is not configured' 
+      return res.status(500).json({
+        ok: false,
+        tier: 3,
+        model: 'ray-live-error',
+        message: 'Ray had a problem talking to OpenAI. Please try again in a minute.',
+        reasoning: null,
+        sources: []
       });
     }
 
@@ -328,11 +328,14 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
     });
 
   } catch (error: any) {
-    console.error('❌ ray-live error:', error);
-    console.error('❌ ray-live error stack:', error.stack);
+    console.error('ray-live error', error);
     return res.status(500).json({
-      error: 'Internal server error',
-      message: error.message || 'An unexpected error occurred'
+      ok: false,
+      tier: 3,
+      model: 'ray-live-error',
+      message: 'Ray had a problem talking to OpenAI. Please try again in a minute.',
+      reasoning: null,
+      sources: []
     });
   }
 }
