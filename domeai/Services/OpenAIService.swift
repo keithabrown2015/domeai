@@ -65,7 +65,7 @@ class OpenAIService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "X-App-Token")
+        request.setValue(ConfigSecret.appToken, forHTTPHeaderField: "x-ray-app-token")
         request.timeoutInterval = 30
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         
