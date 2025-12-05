@@ -251,19 +251,19 @@ enum GoogleSearchServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "Google Search API key is missing. Please add your API key to Config.swift"
+            return "Search API key is missing. Please check your configuration."
         case .missingSearchEngineID:
-            return "Google Custom Search Engine ID (CX) is missing. Please add it to Config.swift"
+            return "Search configuration is missing. Please check your configuration."
         case .invalidQuery:
             return "Invalid search query"
         case .invalidURL:
             return "Invalid API URL"
         case .invalidResponse:
-            return "Invalid response from Google Search API"
+            return "Invalid response from search API"
         case .httpError(let code):
             return "HTTP error: \(code)"
         case .apiError(let message):
-            return "Google Search API error: \(message)"
+            return "Search API error: \(message)"
         case .networkError(let error):
             return "Network error: \(error.localizedDescription)"
         }

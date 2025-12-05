@@ -2,55 +2,49 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { supabaseAdmin } from './lib/supabaseAdmin';
 import type { RayItem } from '../types/ray';
 
-// Map zone hint words to zone, subzone, and kind
+// Map zone hint words to subzone within Brain
+// NOTE: zone is ALWAYS 'brain' for ray_items table
 function mapZoneHint(zoneHint: string | null | undefined): {
   zone: string;
   subzone: string | null;
   kind: string;
 } {
+  // Zone is ALWAYS 'brain' for ray_items table
+  const zone = 'brain';
+  
   if (!zoneHint || typeof zoneHint !== 'string') {
-    return { zone: 'brain', subzone: 'notes', kind: 'note' };
+    return { zone, subzone: 'general', kind: 'note' };
   }
 
   const hint = zoneHint.toLowerCase().trim();
 
-  // Brain zone keywords
-  if (['brain', 'note', 'notes', 'info', 'information'].some(kw => hint.includes(kw))) {
-    return { zone: 'brain', subzone: 'notes', kind: 'note' };
+  // Food-related keywords
+  if (['food', 'recipe', 'meal', 'cooking'].some(kw => hint.includes(kw))) {
+    return { zone, subzone: 'food', kind: 'note' };
   }
 
-  // Nudges zone keywords
-  if (['nudge', 'reminder', 'remind'].some(kw => hint.includes(kw))) {
-    return { zone: 'nudges', subzone: null, kind: 'reminder' };
+  // Research keywords
+  if (['research', 'info', 'information', 'explain', 'how'].some(kw => hint.includes(kw))) {
+    return { zone, subzone: 'research', kind: 'note' };
   }
 
-  // Calendar zone keywords
-  if (['calendar', 'appointment', 'event'].some(kw => hint.includes(kw))) {
-    return { zone: 'calendar', subzone: null, kind: 'calendar_event' };
+  // Projects keywords
+  if (['project', 'plan', 'idea', 'brain'].some(kw => hint.includes(kw))) {
+    return { zone, subzone: 'projects', kind: 'note' };
   }
 
-  // Exercise zone keywords
-  if (['exercise', 'workout', 'run', 'gym', 'walk'].some(kw => hint.includes(kw))) {
-    return { zone: 'exercise', subzone: null, kind: 'log' };
+  // Family keywords
+  if (['family', 'personal'].some(kw => hint.includes(kw))) {
+    return { zone, subzone: 'family', kind: 'note' };
   }
 
-  // Meds zone keywords
-  if (['med', 'meds', 'medication', 'pill'].some(kw => hint.includes(kw))) {
-    return { zone: 'meds', subzone: null, kind: 'note' };
-  }
-
-  // Health zone keywords
-  if (['health', 'doctor', 'blood pressure'].some(kw => hint.includes(kw))) {
-    return { zone: 'health', subzone: null, kind: 'note' };
-  }
-
-  // Projects zone keywords
-  if (['project', 'plan', 'idea'].some(kw => hint.includes(kw))) {
-    return { zone: 'brain', subzone: 'projects', kind: 'note' };
+  // Health keywords
+  if (['health', 'doctor', 'medical'].some(kw => hint.includes(kw))) {
+    return { zone, subzone: 'health_research', kind: 'note' };
   }
 
   // Default fallback
-  return { zone: 'brain', subzone: 'notes', kind: 'note' };
+  return { zone, subzone: 'general', kind: 'note' };
 }
 
 // Detect if a message is a save command
@@ -89,45 +83,50 @@ function findLastAssistantMessage(conversationHistory: any[]): string | null {
   return null;
 }
 
-// Classify content based on title and content (fallback when no zoneHint)
+// Classify content into subzone within Brain
+// NOTE: zone is ALWAYS 'brain' for ray_items table
 function classifyContent(title: string, content: string): {
   zone: string;
   subzone: string | null;
   kind: string;
 } {
+  const zone = 'brain';
   const lowerTitle = title.toLowerCase();
   const lowerContent = content.toLowerCase();
   const combined = `${lowerTitle} ${lowerContent}`;
 
-  // Meds detection
-  if (['pill', 'tablet', 'capsule', 'mg', 'dose', 'take'].some(kw => combined.includes(kw))) {
-    const hasTime = ['every day at', 'at 8am', 'each morning', 'before bed'].some(kw => combined.includes(kw));
-    return { zone: 'meds', subzone: null, kind: hasTime ? 'reminder' : 'note' };
+  // Food-related content
+  const foodKeywords = ['recipe', 'meal', 'food', 'taste', 'flavor', 'cooking', 'ingredient', 'dish', 'cuisine'];
+  if (foodKeywords.some(kw => combined.includes(kw))) {
+    return { zone, subzone: 'food', kind: 'note' };
   }
 
-  // Reminder detection
-  if (['remind me', 'nudge me', 'every day at', 'tomorrow at'].some(kw => combined.includes(kw))) {
-    return { zone: 'nudges', subzone: null, kind: 'reminder' };
+  // Research/explanations
+  const researchKeywords = ['how to', 'explain', 'what is', 'why', 'research', 'study', 'analysis', 'guide', 'tutorial', 'plan', 'steps'];
+  if (researchKeywords.some(kw => combined.includes(kw))) {
+    return { zone, subzone: 'research', kind: 'note' };
   }
 
-  // Exercise detection
-  if (['workout', 'ran', 'run', 'walked', 'steps', 'gym', 'lifting'].some(kw => combined.includes(kw))) {
-    return { zone: 'exercise', subzone: null, kind: 'log' };
+  // Projects
+  const projectKeywords = ['dome', 'project', 'idea', 'feature', 'roadmap'];
+  if (projectKeywords.some(kw => combined.includes(kw))) {
+    return { zone, subzone: 'projects', kind: 'note' };
   }
 
-  // Task detection (action verbs)
-  if (['call ', 'email ', 'text ', 'buy ', 'pick up ', 'schedule '].some(kw => lowerContent.startsWith(kw))) {
-    return { zone: 'tasks', subzone: 'personal', kind: 'task' };
+  // Family
+  const familyKeywords = ['family', 'spouse', 'children', 'kids', 'birthday', 'anniversary'];
+  if (familyKeywords.some(kw => combined.includes(kw))) {
+    return { zone, subzone: 'family', kind: 'note' };
   }
 
-  // Calendar detection
-  if (['on friday', 'at 7pm', 'on monday', 'next week', 'tomorrow'].some(kw => combined.includes(kw)) &&
-      !combined.includes('remind me')) {
-    return { zone: 'calendar', subzone: null, kind: 'calendar_event' };
+  // Health research
+  const healthKeywords = ['health', 'medical', 'doctor', 'symptom', 'condition', 'treatment', 'wellness'];
+  if (healthKeywords.some(kw => combined.includes(kw))) {
+    return { zone, subzone: 'health_research', kind: 'note' };
   }
 
   // Default
-  return { zone: 'brain', subzone: 'notes', kind: 'note' };
+  return { zone, subzone: 'general', kind: 'note' };
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -191,45 +190,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : (source === 'assistant_answer' || source === 'user_note' ? source : 'user_note');
 
       // Determine zone, subzone, and kind
-      let finalZone = 'brain';
-      let finalSubzone: string | null = 'notes';
+      // NOTE: zone is ALWAYS 'brain' for ray_items table
+      const finalZone = 'brain';
+      let finalSubzone: string | null = 'general';
       let finalKind = 'note';
 
       if (isSaveCommandDetected) {
-        // Use defaults for save command: zone="brain", subzone=null, kind="note"
-        finalZone = 'brain';
-        finalSubzone = null;
-        finalKind = 'note';
+        // Classify into subzone based on content
+        const classified = classifyContent(finalTitle.trim(), finalContent.trim());
+        finalSubzone = classified.subzone || 'general';
+        finalKind = classified.kind || 'note';
       }
-      // If explicit zone/kind provided, use those (highest priority)
-      else if (zone && typeof zone === 'string' && zone.trim().length > 0) {
-        finalZone = zone.trim();
-        finalSubzone = (subzone !== undefined && subzone !== null && typeof subzone === 'string' && subzone.trim().length > 0)
-          ? subzone.trim()
-          : null;
+      // If explicit subzone/kind provided, use those (but zone is always 'brain')
+      else if (subzone && typeof subzone === 'string' && subzone.trim().length > 0) {
+        finalSubzone = subzone.trim();
         finalKind = (kind && typeof kind === 'string' && kind.trim().length > 0)
           ? kind.trim()
           : 'note';
       }
-      // If zoneHint is provided, use it
+      // If zoneHint is provided, use it to determine subzone
       else if (zoneHint && typeof zoneHint === 'string' && zoneHint.trim().length > 0) {
         const mapped = mapZoneHint(zoneHint);
-        finalZone = mapped.zone;
-        finalSubzone = mapped.subzone;
-        finalKind = mapped.kind;
+        finalSubzone = mapped.subzone || 'general';
+        finalKind = mapped.kind || 'note';
       }
       // Otherwise, classify based on content
       else {
         const classified = classifyContent(finalTitle.trim(), finalContent.trim());
-        finalZone = classified.zone;
-        finalSubzone = classified.subzone;
-        finalKind = classified.kind;
+        finalSubzone = classified.subzone || 'general';
+        finalKind = classified.kind || 'note';
       }
 
       // Ensure defaults are set
-      if (!finalZone) finalZone = 'brain';
+      if (!finalSubzone) finalSubzone = 'general';
       if (!finalKind) finalKind = 'note';
-      if (finalSubzone === undefined) finalSubzone = isSaveCommandDetected ? null : 'notes';
 
       const finalTags = (tags && typeof tags === 'string' && tags.trim().length > 0)
         ? tags.trim()
@@ -277,19 +271,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Handle GET requests - list all ray_items
+  // NOTE: ray_items table is Brain-only, so we always filter by zone='brain'
   if (req.method === 'GET') {
     try {
-      const { zone, kind } = req.query;
+      const { subzone, kind } = req.query;
       
       let query = supabaseAdmin
         .from('ray_items')
-        .select('*');
+        .select('*')
+        .eq('zone', 'brain'); // Always filter by zone='brain'
       
-      // Apply filters if provided
-      if (zone && typeof zone === 'string') {
-        query = query.eq('zone', zone);
+      // Apply subzone filter if provided
+      if (subzone && typeof subzone === 'string') {
+        query = query.eq('subzone', subzone);
       }
       
+      // Apply kind filter if provided
       if (kind && typeof kind === 'string') {
         query = query.eq('kind', kind);
       }

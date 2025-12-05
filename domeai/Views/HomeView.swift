@@ -19,7 +19,7 @@ struct HomeView: View {
     @State private var showingAttachmentSheet = false
     @State private var showingEmailSettings = false
     @State private var pulseScale: CGFloat = 1.0
-    @State private var selectedSection: String = "🧠"
+    @State private var selectedSection: String = "" // Default to empty so chat shows on launch
     @FocusState private var isTextFieldFocused: Bool
     
     // Scroll to bottom button state
@@ -28,7 +28,7 @@ struct HomeView: View {
     @State private var scrollProxy: ScrollViewProxy?
     
     // Emoji reordering state
-    @State private var emojiOrder = ["🧠", "⏰", "📅", "✔️", "🏃", "💊", "🩺", "🔗"]
+    @State private var emojiOrder = ["🧠", "⏰", "📅", "🏃", "💊", "🩺", "🔗"]
     @State private var draggedEmoji: String?
     
     // Attachment picker states
@@ -56,9 +56,71 @@ struct HomeView: View {
                             .padding(.bottom, 12)
                             .padding(.horizontal, 16)
                             
-                            chatMessagesSection(geometry)
-                            attachmentSection
-                            bottomInputBar
+                            // Show different content based on selected section
+                            // Default (empty string) shows chat view
+                            if selectedSection == "🧠" {
+                                NavigationStack {
+                                    BrainView(onDismiss: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                            selectedSection = ""
+                                        }
+                                    })
+                                    .navigationBarTitleDisplayMode(.inline)
+                                }
+                            } else if selectedSection == "⏰" {
+                                NavigationStack {
+                                    ComingSoonView(onDismiss: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                            selectedSection = ""
+                                        }
+                                    }, emoji: "⏰", title: "Nudges")
+                                }
+                            } else if selectedSection == "📅" {
+                                NavigationStack {
+                                    ComingSoonView(onDismiss: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                            selectedSection = ""
+                                        }
+                                    }, emoji: "📅", title: "Calendar")
+                                }
+                            } else if selectedSection == "💊" {
+                                NavigationStack {
+                                    ComingSoonView(onDismiss: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                            selectedSection = ""
+                                        }
+                                    }, emoji: "💊", title: "Meds")
+                                }
+                            } else if selectedSection == "🏃" {
+                                NavigationStack {
+                                    ComingSoonView(onDismiss: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                            selectedSection = ""
+                                        }
+                                    }, emoji: "🏃", title: "Exercise")
+                                }
+                            } else if selectedSection == "🩺" {
+                                NavigationStack {
+                                    ComingSoonView(onDismiss: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                            selectedSection = ""
+                                        }
+                                    }, emoji: "🩺", title: "Health")
+                                }
+                            } else if selectedSection == "🔗" {
+                                NavigationStack {
+                                    ComingSoonView(onDismiss: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                            selectedSection = ""
+                                        }
+                                    }, emoji: "🔗", title: "Links")
+                                }
+                            } else {
+                                // Default: show chat (when selectedSection is empty or other emoji)
+                                chatMessagesSection(geometry)
+                                attachmentSection
+                                bottomInputBar
+                            }
                         }
                     )
                     .overlay(ttsOverlay, alignment: .top)
@@ -67,11 +129,14 @@ struct HomeView: View {
             .preferredColorScheme(.dark)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        // Help button action
-                    } label: {
-                        Text("❓")
-                            .font(.system(size: 20))
+                    // Only show help button when on chat screen (selectedSection is empty)
+                    if selectedSection.isEmpty {
+                        Button {
+                            // Help button action
+                        } label: {
+                            Text("❓")
+                                .font(.system(size: 20))
+                        }
                     }
                 }
                 
