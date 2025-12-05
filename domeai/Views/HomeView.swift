@@ -397,7 +397,7 @@ struct HomeView: View {
                     }
                 }
                 .padding(.trailing, 16)
-                .padding(.bottom, 16)
+                .padding(.bottom, 100) // Position above input bar (input bar ~84pt + safe margin)
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
