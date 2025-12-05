@@ -337,7 +337,7 @@ struct HomeView: View {
                                 .id("thinking")
                         }
                         
-                        // Bottom marker for scroll detection
+                        // Bottom marker for scroll detection and scrolling target
                         Color.clear
                             .frame(height: 1)
                             .id("bottom")
@@ -349,10 +349,31 @@ struct HomeView: View {
                                     )
                                 }
                             )
+                        
+                        // Scroll position detector
+                        GeometryReader { geometry -> Color in
+                            let frame = geometry.frame(in: .named("scrollView"))
+                            let scrollViewHeight = geometry.frame(in: .global).height
+                            
+                            DispatchQueue.main.async {
+                                // Show button when content is scrolled up (frame.minY is negative when scrolled)
+                                // Hide when near bottom
+                                let distanceFromBottom = frame.maxY - scrollViewHeight
+                                let shouldShow = distanceFromBottom > 150
+                                
+                                if shouldShow != showScrollButton {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        showScrollButton = shouldShow
+                                    }
+                                }
+                            }
+                            return Color.clear
+                        }
+                        .frame(height: 1)
                     }
                     .padding()
                 }
-                .coordinateSpace(name: "scroll")
+                .coordinateSpace(name: "scrollView")
                 .onPreferenceChange(ViewOffsetKey.self) { offset in
                     // Debug: Print offset to see what values we're getting
                     print("🔍 Scroll offset: \(offset)")
@@ -391,30 +412,30 @@ struct HomeView: View {
         }
         .overlay(alignment: .bottom) {
             // Floating scroll to bottom button - centered above input field
-            // TEMPORARY: Always visible for testing
-            Button(action: {
-                print("ARROW TAPPED - Scrolling to bottom")
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                    scrollProxy?.scrollTo("bottom", anchor: .bottom)
+            if showScrollButton {
+                Button(action: {
+                    print("ARROW TAPPED - Scrolling to bottom")
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        scrollProxy?.scrollTo("bottom", anchor: .bottom)
+                    }
+                    // Scroll detection will handle hiding the button naturally
+                }) {
+                    ZStack {
+                        // iOS-style blur background
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                            .frame(width: 44, height: 44)
+                            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
+                        
+                        // Down arrow icon
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.primary)
+                    }
                 }
-                // Hide button after scrolling
-                // showScrollButton = false // TEMPORARILY COMMENTED OUT
-            }) {
-                ZStack {
-                    // iOS-style blur background
-                    Circle()
-                        .fill(.ultraThinMaterial)
-                        .frame(width: 44, height: 44)
-                        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
-                    
-                    // Down arrow icon
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.primary)
-                }
+                .padding(.bottom, 70) // Position just above input field
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
-            .padding(.bottom, 70) // Position just above input field
-            .transition(.opacity.combined(with: .scale(scale: 0.8)))
         }
     }
     
