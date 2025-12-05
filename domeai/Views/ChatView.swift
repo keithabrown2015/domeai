@@ -7,12 +7,14 @@
 
 import SwiftUI
 import UIKit
+import Combine
 
 struct ChatView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var micButtonScale: CGFloat = 1.0
     @State private var pendingDeleteMessage: Message? = nil
     @State private var showScrollButton = false
+    @State private var hasScrolledToBottom = false
     
     var body: some View {
         NavigationStack {
@@ -26,7 +28,7 @@ struct ChatView: View {
                         // Main chat area
                         ScrollViewReader { proxy in
                             ScrollView {
-                                LazyVStack(spacing: 8) {
+                                VStack(spacing: 8) {
                                     ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
                                         MessageWithTimestampView(
                                             message: message,
@@ -66,21 +68,40 @@ struct ChatView: View {
                                 .padding(.vertical, 12)
                             }
                             .onAppear {
-                                // Scroll to bottom anchor when view appears - multiple attempts to ensure it works
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                if let last = viewModel.messages.last {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        proxy.scrollTo(last.id, anchor: .bottom)
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                        proxy.scrollTo(last.id, anchor: .bottom)
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                                        proxy.scrollTo(last.id, anchor: .bottom)
+                                    }
                                 }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
-                                }
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                            }
+                            .onChange(of: viewModel.messages) { oldMessages, newMessages in
+                                // First load - messages went from empty to having content
+                                if oldMessages.isEmpty && !newMessages.isEmpty {
+                                    if let last = newMessages.last {
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                            proxy.scrollTo(last.id, anchor: .bottom)
+                                        }
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                            proxy.scrollTo(last.id, anchor: .bottom)
+                                        }
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                                            proxy.scrollTo(last.id, anchor: .bottom)
+                                        }
+                                    }
                                 }
                             }
                             .onChange(of: viewModel.messages.count) { _, _ in
                                 // Auto-scroll to bottom when new message arrives
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                if let last = viewModel.messages.last {
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        proxy.scrollTo(last.id, anchor: .bottom)
+                                    }
                                 }
                             }
                             .onChange(of: viewModel.isProcessing) { _, isProcessing in
@@ -95,8 +116,10 @@ struct ChatView: View {
                             .overlay(alignment: .bottom) {
                                 if showScrollButton {
                                     Button(action: {
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                            proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                        if let last = viewModel.messages.last {
+                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                                proxy.scrollTo(last.id, anchor: .bottom)
+                                            }
                                         }
                                     }) {
                                         ZStack {
