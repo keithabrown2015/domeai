@@ -423,6 +423,23 @@ struct HomeView: View {
         .onChange(of: showScrollButton) { oldValue, newValue in
             print("🔍 showScrollButton changed: \(oldValue) -> \(newValue)")
         }
+        .overlay(alignment: .bottomTrailing) {
+            Button(action: {
+                print("ARROW TAPPED")
+            }) {
+                ZStack {
+                    Circle()
+                        .fill(Color.blue)
+                        .frame(width: 50, height: 50)
+                    Image(systemName: "arrow.down")
+                        .font(.system(size: 24, weight: .bold))
+                        .foregroundColor(.white)
+                }
+                .shadow(color: .black.opacity(0.4), radius: 6)
+            }
+            .padding(.trailing, 20)
+            .padding(.bottom, 100)
+        }
     }
     
     @ViewBuilder
