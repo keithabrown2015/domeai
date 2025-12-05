@@ -232,30 +232,41 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
     const responseData = await response.json();
     console.log('📦 ray-live: Responses API response received');
     
-    // Extract the first text output from the Responses API result
-    let replyText = "Sorry, I couldn't generate a reply.";
+    // Extract the final answer text, ignoring web_search_call objects
+    const out = responseData?.output ?? [];
+    let replyText = "Sorry, I couldn't find an answer.";
 
-    const firstOutput = responseData?.output?.[0];
-    const firstContent = firstOutput?.content?.[0];
-
-    if (firstContent && firstContent.type === "output_text" && firstContent.text) {
-      replyText = firstContent.text;
-    } else if (typeof responseData?.output_text === "string") {
-      // Fallback if SDK exposes output_text directly
-      replyText = responseData.output_text;
-    } else if (firstContent && typeof firstContent === "string") {
-      replyText = firstContent;
-    } else if (firstContent && firstContent.text && typeof firstContent.text === "string") {
-      replyText = firstContent.text;
-    } else if (firstContent && firstContent.message && typeof firstContent.message === "string") {
-      replyText = firstContent.message;
-    } else {
-      // Last resort: stringify but still extract what we can
-      console.warn('⚠️ ray-live: Using fallback extraction');
-      replyText = JSON.stringify(firstContent ?? firstOutput ?? responseData);
+    // Scan through all output items to find the first output_text content
+    for (const item of out) {
+      if (!item?.content) continue;
+      
+      for (const c of item.content) {
+        // Skip web_search_call objects - we only want the final answer text
+        if (c?.type === "web_search_call") {
+          continue;
+        }
+        
+        // Look for output_text type with text field
+        if (c?.type === "output_text" && typeof c.text === "string") {
+          replyText = c.text;
+          break;
+        }
+      }
+      
+      // If we found the answer text, stop searching
+      if (replyText !== "Sorry, I couldn't find an answer.") {
+        break;
+      }
     }
 
-    if (!replyText || replyText.trim().length === 0) {
+    // Fallback: check if output_text is directly on responseData
+    if (replyText === "Sorry, I couldn't find an answer." && typeof responseData?.output_text === "string") {
+      replyText = responseData.output_text;
+    }
+
+    if (!replyText || replyText.trim().length === 0 || replyText === "Sorry, I couldn't find an answer.") {
+      console.error('❌ ray-live: Could not extract answer text from response');
+      console.error('❌ ray-live: Response structure:', JSON.stringify(responseData).substring(0, 1000));
       throw new Error('No reply text found in Responses API response');
     }
 
