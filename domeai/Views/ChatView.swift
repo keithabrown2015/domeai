@@ -12,6 +12,8 @@ import Combine
 struct ChatView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var micButtonScale: CGFloat = 1.0
+    @State private var pendingDeleteMessage: Message? = nil
+    @State private var shouldAutoScroll = true
     
     var body: some View {
         NavigationStack {
@@ -21,37 +23,74 @@ struct ChatView: View {
                         .ignoresSafeArea()
                     
                     VStack(spacing: 0) {
-                        // FLIPPED SCROLLVIEW - This makes it open at bottom
-                        ScrollView {
-                            LazyVStack(spacing: 8) {
-                                // REVERSED message order because view is flipped
-                                ForEach(viewModel.messages.reversed()) { message in
-                                    let originalIndex = viewModel.messages.firstIndex(where: { $0.id == message.id }) ?? 0
-                                    let previousMessage = originalIndex > 0 ? viewModel.messages[originalIndex - 1] : nil
+                        // MARK: - Chat Messages ScrollView
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                LazyVStack(spacing: 8) {
+                                    ForEach(viewModel.messages) { message in
+                                        let index = viewModel.messages.firstIndex(where: { $0.id == message.id }) ?? 0
+                                        MessageWithTimestampView(
+                                            message: message,
+                                            previousMessage: index > 0 ? viewModel.messages[index - 1] : nil,
+                                            maxWidth: geometry.size.width * 0.75
+                                        )
+                                        .id(message.id)
+                                    }
                                     
-                                    MessageWithTimestampView(
-                                        message: message,
-                                        previousMessage: previousMessage,
-                                        maxWidth: geometry.size.width * 0.75
-                                    )
-                                    .rotationEffect(.degrees(180))
-                                    .scaleEffect(x: -1, y: 1, anchor: .center)
-                                    .id(message.id)
+                                    if viewModel.isProcessing {
+                                        TypingIndicatorBubble()
+                                            .id("typing-indicator")
+                                    }
+                                    
+                                    // Invisible anchor at the very bottom
+                                    Color.clear
+                                        .frame(height: 1)
+                                        .id("bottom")
                                 }
-                                
-                                if viewModel.isProcessing {
-                                    TypingIndicatorBubble()
-                                        .rotationEffect(.degrees(180))
-                                        .scaleEffect(x: -1, y: 1, anchor: .center)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
+                            }
+                            // iOS 17+ default anchor
+                            .defaultScrollAnchor(.bottom)
+                            // Scroll to bottom when view first appears
+                            .onAppear {
+                                scrollToBottom(proxy: proxy, animated: false)
+                            }
+                            // Scroll to bottom when messages change
+                            .onChange(of: viewModel.messages.count) { _, _ in
+                                scrollToBottom(proxy: proxy, animated: true)
+                            }
+                            // Scroll to bottom when processing state changes (typing indicator appears)
+                            .onChange(of: viewModel.isProcessing) { _, isProcessing in
+                                if isProcessing {
+                                    scrollToBottom(proxy: proxy, animated: true)
                                 }
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
+                            // Extra insurance: scroll after a delay to handle async message loading
+                            .task {
+                                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                                await MainActor.run {
+                                    scrollToBottom(proxy: proxy, animated: false)
+                                }
+                            }
+                            .overlay(alignment: .bottomTrailing) {
+                                // Scroll to bottom button
+                                Button {
+                                    scrollToBottom(proxy: proxy, animated: true)
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 18, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .frame(width: 44, height: 44)
+                                        .background(Circle().fill(Color.blue))
+                                        .shadow(radius: 4)
+                                }
+                                .padding(.trailing, 16)
+                                .padding(.bottom, 16)
+                            }
                         }
-                        .rotationEffect(.degrees(180))
-                        .scaleEffect(x: -1, y: 1, anchor: .center)
                         
-                        // Recording text bubble
+                        // MARK: - Recording Text Preview
                         if viewModel.isRecording && !viewModel.recognizedText.isEmpty {
                             HStack {
                                 Text(viewModel.recognizedText)
@@ -71,7 +110,7 @@ struct ChatView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                         
-                        // Attachment thumbnail
+                        // MARK: - Attachment Thumbnail
                         if viewModel.currentAttachment != nil {
                             AttachmentThumbnailView()
                                 .padding(.horizontal, 16)
@@ -79,10 +118,12 @@ struct ChatView: View {
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                         
-                        // Bottom input bar
+                        // MARK: - Bottom Input Bar
                         HStack(spacing: 12) {
                             AttachmentButton()
+                            
                             Spacer()
+                            
                             Button {
                                 toggleRecording()
                             } label: {
@@ -98,8 +139,12 @@ struct ChatView: View {
                             }
                             .disabled(viewModel.isProcessing)
                             .opacity(viewModel.isProcessing ? 0.5 : 1.0)
-                            .onAppear { updateMicAnimation() }
-                            .onChange(of: viewModel.isRecording) { _, _ in updateMicAnimation() }
+                            .onAppear {
+                                updateMicAnimation()
+                            }
+                            .onChange(of: viewModel.isRecording) { _, _ in
+                                updateMicAnimation()
+                            }
                         }
                         .frame(height: 60)
                         .padding(.horizontal, 12)
@@ -124,19 +169,39 @@ struct ChatView: View {
         }
     }
     
+    // MARK: - Scroll Helper
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+    
+    // MARK: - Test Connection
     private func testOpenAIConnection() {
+        print("🧪 TEST: Starting OpenAI connection test")
+        
         Task {
             do {
+                print("🧪 TEST: Calling OpenAI with test message")
                 let response = try await OpenAIService.shared.sendChatMessage(
                     messages: [Message(content: "Say hello", isFromUser: true)],
                     systemPrompt: "You are Ray. Say hello back."
                 )
+                print("🧪 TEST RESPONSE: \(response)")
+                
                 await MainActor.run {
                     let testMessage = Message(content: "🧪 TEST: \(response)", isFromUser: false)
                     viewModel.messages.append(testMessage)
                 }
             } catch {
-                print("🧪 TEST ERROR: \(error)")
+                print("🧪 TEST ERROR: \(error.localizedDescription)")
+                print("🧪 TEST ERROR: Full error: \(error)")
             }
         }
     }
@@ -151,7 +216,9 @@ struct ChatView: View {
     
     private func updateMicAnimation() {
         if viewModel.isRecording {
-            withAnimation(Animation.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+            withAnimation(
+                Animation.easeInOut(duration: 1.0).repeatForever(autoreverses: true)
+            ) {
                 micButtonScale = 1.1
             }
         } else {
@@ -162,6 +229,8 @@ struct ChatView: View {
     }
 }
 
+// MARK: - Message Bubble
+
 private struct MessageBubble: View {
     let message: Message
     var maxWidth: CGFloat = 300
@@ -169,7 +238,9 @@ private struct MessageBubble: View {
     
     var body: some View {
         HStack {
-            if message.isFromUser { Spacer() }
+            if message.isFromUser {
+                Spacer()
+            }
             
             VStack(alignment: message.isFromUser ? .trailing : .leading, spacing: 4) {
                 if let imageData = message.attachmentData,
@@ -193,25 +264,55 @@ private struct MessageBubble: View {
                             RoundedRectangle(cornerRadius: 18)
                                 .fill(message.isFromUser ?
                                       Color(red: 0.0, green: 0.48, blue: 1.0) :
-                                      Color(red: 0.23, green: 0.23, blue: 0.24))
+                                      Color(red: 0.23, green: 0.23, blue: 0.24)
+                                )
                         )
                         .frame(maxWidth: maxWidth, alignment: message.isFromUser ? .trailing : .leading)
                 }
             }
             
-            if !message.isFromUser { Spacer() }
+            if !message.isFromUser {
+                Spacer()
+            }
         }
         .contextMenu {
             Button {
                 UIPasteboard.general.string = message.content
-                let generator = UINotificationFeedbackGenerator()
-                generator.notificationOccurred(.success)
+                provideHapticFeedback()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showCopiedToast = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showCopiedToast = false
+                    }
+                }
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
         }
+        .overlay(alignment: message.isFromUser ? .topTrailing : .topLeading) {
+            if showCopiedToast {
+                Text("Copied!")
+                    .font(.caption2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.75))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                    .transition(.opacity.combined(with: .scale))
+                    .padding(message.isFromUser ? .trailing : .leading, 8)
+            }
+        }
+    }
+    
+    private func provideHapticFeedback() {
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
     }
 }
+
+// MARK: - Timestamp Wrapper
 
 private struct MessageWithTimestampView: View {
     let message: Message
@@ -221,6 +322,11 @@ private struct MessageWithTimestampView: View {
     var body: some View {
         VStack(alignment: message.isFromUser ? .trailing : .leading, spacing: 4) {
             MessageBubble(message: message, maxWidth: maxWidth)
+                .transition(.asymmetric(
+                    insertion: .move(edge: message.isFromUser ? .trailing : .leading)
+                        .combined(with: .opacity),
+                    removal: .opacity
+                ))
             
             if shouldShowTimestamp {
                 Text(message.timestamp, style: .relative)
@@ -230,6 +336,7 @@ private struct MessageWithTimestampView: View {
                     .frame(maxWidth: maxWidth, alignment: message.isFromUser ? .trailing : .leading)
                     .padding(.horizontal, 8)
                     .padding(.top, 4)
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: message.isFromUser ? .trailing : .leading)
@@ -238,37 +345,228 @@ private struct MessageWithTimestampView: View {
     
     private var shouldShowTimestamp: Bool {
         guard let previous = previousMessage else { return true }
-        return message.timestamp.timeIntervalSince(previous.timestamp) >= 5 * 60
+        let difference = message.timestamp.timeIntervalSince(previous.timestamp)
+        return difference >= 5 * 60
     }
 }
+
+// MARK: - User Message Actions
+
+struct UserMessageActions: View {
+    let message: Message
+    @State private var showCopiedFeedback = false
+    
+    var body: some View {
+        HStack {
+            Spacer()
+            
+            Button {
+                UIPasteboard.general.string = message.content
+                showCopiedFeedback = true
+                
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    showCopiedFeedback = false
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: showCopiedFeedback ? "checkmark" : "doc.on.doc")
+                    Text(showCopiedFeedback ? "Copied!" : "Copy")
+                        .font(.caption)
+                }
+                .foregroundColor(showCopiedFeedback ? .green : .gray)
+            }
+        }
+        .padding(.top, 2)
+    }
+}
+
+// MARK: - Ray Message Actions
+
+struct RayMessageActions: View {
+    let message: Message
+    @ObservedObject var viewModel: ChatViewModel
+    @Binding var messageText: String
+    @State private var showCopiedFeedback = false
+    @State private var showSharedFeedback = false
+    
+    var body: some View {
+        HStack(spacing: 16) {
+            Button {
+                UIPasteboard.general.string = message.content
+                showCopiedFeedback = true
+                
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    showCopiedFeedback = false
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: showCopiedFeedback ? "checkmark" : "doc.on.doc")
+                    Text(showCopiedFeedback ? "Copied!" : "Copy")
+                        .font(.caption)
+                }
+                .foregroundColor(showCopiedFeedback ? .green : .gray)
+            }
+            
+            Button {
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+                
+                TextToSpeechService.shared.speak(text: message.content)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "speaker.wave.2")
+                    Text("Read")
+                        .font(.caption)
+                }
+                .foregroundColor(.gray)
+            }
+            
+            Button {
+                shareMessage(message.content)
+                showSharedFeedback = true
+                
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    showSharedFeedback = false
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: showSharedFeedback ? "checkmark" : "square.and.arrow.up")
+                    Text(showSharedFeedback ? "Shared!" : "Share")
+                        .font(.caption)
+                }
+                .foregroundColor(showSharedFeedback ? .green : .gray)
+            }
+            
+            if let sources = message.sources, !sources.isEmpty {
+                Button {
+                    viewModel.showSources(for: message)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "link")
+                        Text("Sources (\(sources.count))")
+                            .font(.caption)
+                    }
+                    .foregroundColor(.blue)
+                }
+            }
+        }
+        .padding(.leading, message.isFromUser ? 0 : 50)
+        .padding(.trailing, message.isFromUser ? 50 : 0)
+        .padding(.top, 4)
+    }
+    
+    private func shareMessage(_ text: String) {
+        let av = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = windowScene.windows.first,
+           let rootVC = window.rootViewController {
+            rootVC.present(av, animated: true)
+        }
+    }
+}
+
+// MARK: - Typing Indicator Bubble
 
 struct TypingIndicatorBubble: View {
     @State private var isAnimating = false
     
+    private let bubbleBackground = Color.gray.opacity(0.2)
+    private let dotColor = Color.gray.opacity(0.6)
+    private let dotSize: CGFloat = 8
+    private let animationDuration = 0.6
+    
     var body: some View {
-        HStack {
-            HStack(spacing: 6) {
-                ForEach(0..<3) { i in
-                    Circle()
-                        .fill(Color.gray.opacity(0.6))
-                        .frame(width: 8, height: 8)
-                        .scaleEffect(isAnimating ? 1.0 : 0.8)
-                        .opacity(isAnimating ? 1.0 : 0.6)
-                        .animation(
-                            Animation.easeInOut(duration: 0.6)
-                                .repeatForever()
-                                .delay(Double(i) * 0.2),
-                            value: isAnimating
+        HStack(alignment: .bottom) {
+            VStack(alignment: .leading) {
+                HStack(spacing: 6) {
+                    ForEach(0..<3) { index in
+                        TypingDot(
+                            delay: Double(index) * (animationDuration / 3),
+                            isAnimating: $isAnimating,
+                            size: dotSize,
+                            color: dotColor,
+                            duration: animationDuration
                         )
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(bubbleBackground)
+                        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
+                )
+                .frame(maxWidth: UIScreen.main.bounds.width * 0.8, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(RoundedRectangle(cornerRadius: 20).fill(Color.gray.opacity(0.2)))
+            
             Spacer()
         }
         .padding(.horizontal, 16)
-        .onAppear { isAnimating = true }
+        .padding(.top, 8)
+        .onAppear {
+            isAnimating = true
+        }
+        .onDisappear {
+            isAnimating = false
+        }
+    }
+}
+
+private struct TypingDot: View {
+    let delay: Double
+    @Binding var isAnimating: Bool
+    let size: CGFloat
+    let color: Color
+    let duration: Double
+
+    @State private var scale: CGFloat = 0.8
+    @State private var opacity: Double = 0.6
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .scaleEffect(scale)
+            .opacity(opacity)
+            .onChange(of: isAnimating) { _, animating in
+                if animating {
+                    startAnimating()
+                } else {
+                    stopAnimating()
+                }
+            }
+            .onAppear {
+                if isAnimating {
+                    startAnimating()
+                }
+            }
+    }
+
+    private func startAnimating() {
+        withAnimation(
+            Animation.easeInOut(duration: duration)
+                .repeatForever()
+                .delay(delay)
+        ) {
+            scale = 1.0
+            opacity = 1.0
+        }
+    }
+
+    private func stopAnimating() {
+        withAnimation(.easeOut(duration: 0.2)) {
+            scale = 0.8
+            opacity = 0.6
+        }
     }
 }
 
