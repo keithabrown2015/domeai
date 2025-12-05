@@ -53,17 +53,25 @@ struct ChatView: View {
                                     .padding(.vertical, 12)
                                 }
                                 .onAppear {
-                                    proxy.scrollTo("BOTTOM_ANCHOR")
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                        withAnimation(.none) {
+                                            proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
+                                        }
+                                    }
                                 }
                                 .onReceive(Just(viewModel.messages.count)) { _ in
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        proxy.scrollTo("BOTTOM_ANCHOR")
+                                        withAnimation(.easeOut(duration: 0.2)) {
+                                            proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
+                                        }
                                     }
                                 }
                             }
                             .overlay(alignment: .bottom) {
                                 Button {
-                                    proxy.scrollTo("BOTTOM_ANCHOR")
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
+                                    }
                                 } label: {
                                     Image(systemName: "chevron.down")
                                         .font(.system(size: 18, weight: .bold))
