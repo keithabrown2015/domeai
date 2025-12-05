@@ -231,19 +231,30 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
 
     const responseData = await response.json();
     console.log('📦 ray-live: Responses API response received');
+    console.log('📦 ray-live: Response structure keys:', Object.keys(responseData));
     
-    // Parse Responses API output to extract reply text
-    const first = responseData.output?.[0]?.content?.[0];
-    let replyText: string = '';
+    // Extract the first text output from the Responses API result
+    let replyText = "Sorry, I couldn't generate a reply.";
 
-    if (first && first.type === 'output_text') {
-      replyText = first.text;
-    } else if (first && 'message' in first && typeof (first as any).message === 'string') {
-      replyText = (first as any).message;
+    const firstOutput = responseData?.output?.[0];
+    const firstContent = firstOutput?.content?.[0];
+
+    if (firstContent && firstContent.type === "output_text" && firstContent.text) {
+      replyText = firstContent.text;
+    } else if (typeof responseData?.output_text === "string") {
+      // Fallback if SDK exposes output_text directly
+      replyText = responseData.output_text;
+    } else if (firstContent && typeof firstContent === "string") {
+      replyText = firstContent;
+    } else if (firstContent && firstContent.text && typeof firstContent.text === "string") {
+      replyText = firstContent.text;
+    } else if (firstContent && firstContent.message && typeof firstContent.message === "string") {
+      replyText = firstContent.message;
     } else {
-      // Fallback: try to extract text from the response structure
-      replyText = JSON.stringify(first ?? responseData);
-      console.warn('⚠️ ray-live: Could not extract text from expected format, using fallback');
+      console.error('❌ ray-live: Could not extract text from response structure');
+      console.error('❌ ray-live: firstOutput:', JSON.stringify(firstOutput).substring(0, 500));
+      console.error('❌ ray-live: firstContent:', JSON.stringify(firstContent).substring(0, 500));
+      throw new Error('Could not extract reply text from Responses API response');
     }
 
     if (!replyText || replyText.trim().length === 0) {
