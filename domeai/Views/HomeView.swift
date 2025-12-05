@@ -337,60 +337,17 @@ struct HomeView: View {
                                 .id("thinking")
                         }
                         
-                        // Bottom marker for scroll detection and scrolling target
+                        // Bottom anchor for scrolling
                         Color.clear
                             .frame(height: 1)
                             .id("bottom")
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear.preference(
-                                        key: ViewOffsetKey.self,
-                                        value: geo.frame(in: .named("scroll")).minY
-                                    )
-                                }
-                            )
-                        
-                        // Scroll position detector
-                        GeometryReader { geometry -> Color in
-                            let frame = geometry.frame(in: .named("scrollView"))
-                            let scrollViewHeight = geometry.frame(in: .global).height
-                            
-                            DispatchQueue.main.async {
-                                // Show button when content is scrolled up (frame.minY is negative when scrolled)
-                                // Hide when near bottom
-                                let distanceFromBottom = frame.maxY - scrollViewHeight
-                                let shouldShow = distanceFromBottom < -100
-                                
-                                if shouldShow != showScrollButton {
-                                    withAnimation(.easeInOut(duration: 0.2)) {
-                                        showScrollButton = shouldShow
-                                    }
-                                }
-                            }
-                            return Color.clear
-                        }
-                        .frame(height: 1)
                     }
                     .padding()
                 }
-                .coordinateSpace(name: "scrollView")
-                .onPreferenceChange(ViewOffsetKey.self) { offset in
-                    // Debug: Print offset to see what values we're getting
-                    print("🔍 Scroll offset: \(offset)")
-                    
-                    // When at bottom, offset should be close to 0 or positive
-                    // When scrolled up, offset becomes more negative
-                    // Show button when scrolled up more than 100 points
-                    let shouldShow = offset < -100
-                    print("🔍 Should show scroll button: \(shouldShow), current showScrollButton: \(showScrollButton)")
-                    
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showScrollButton = shouldShow
-                    }
-                }
+                .defaultScrollAnchor(.bottom)
                 .onAppear {
                     scrollProxy = proxy
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                 }
@@ -398,44 +355,28 @@ struct HomeView: View {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
-                    // Hide button when new message arrives and auto-scrolls
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showScrollButton = false
-                        }
-                    }
                 }
             }
-        }
-        .onChange(of: showScrollButton) { oldValue, newValue in
-            print("🔍 showScrollButton changed: \(oldValue) -> \(newValue)")
         }
         .overlay(alignment: .bottom) {
-            // Floating scroll to bottom button - centered above input field
-            if showScrollButton {
-                Button(action: {
-                    print("ARROW TAPPED - Scrolling to bottom")
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                        scrollProxy?.scrollTo("bottom", anchor: .bottom)
-                    }
-                    // Scroll detection will handle hiding the button naturally
-                }) {
-                    ZStack {
-                        // iOS-style blur background
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                            .frame(width: 44, height: 44)
-                            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
-                        
-                        // Down arrow icon
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.primary)
-                    }
+            // Floating scroll to bottom button - always visible
+            Button(action: {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                    scrollProxy?.scrollTo("bottom", anchor: .bottom)
                 }
-                .padding(.bottom, 70) // Position just above input field
-                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            }) {
+                ZStack {
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .frame(width: 44, height: 44)
+                        .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
+                    
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.primary)
+                }
             }
+            .padding(.bottom, 70)
         }
     }
     
