@@ -257,6 +257,8 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
     console.log('🌐 ray-live: Calling OpenAI Responses API with web_search tool');
     console.log('🌐 ray-live: Model: gpt-4o-mini');
     console.log('🌐 ray-live: Input messages count:', inputMessages.length);
+    console.log('🌐 ray-live: User query:', userQuery);
+    console.log('🌐 ray-live: Query contains sports keywords?', /monday night football|nfl|sports|score|game|football/i.test(userQuery));
 
     // Call OpenAI Responses API with web_search tool
     const response = await fetch('https://api.openai.com/v1/responses', {
@@ -280,6 +282,7 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
 
     const responseData = await response.json();
     console.log('📦 ray-live: Responses API response received');
+    console.log('📦 ray-live: Full response structure:', JSON.stringify(responseData).substring(0, 3000));
     
     // Extract the final answer text, ignoring web_search_call objects
     // Look at response.output, then item.content, find LAST output_text (after tool calls)
@@ -290,24 +293,40 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
       ? responseData.output 
       : (responseData?.output ? [responseData.output] : []);
     
+    console.log(`📦 ray-live: Found ${outputArray.length} output items`);
+    
+    // Track if web_search was called
+    let webSearchWasCalled = false;
+    let webSearchQueries: string[] = [];
+    
     // Collect all output_text items (we want the LAST one, after tool calls)
     const textItems: string[] = [];
     
     // Scan through all output items
-    for (const item of outputArray) {
+    for (let i = 0; i < outputArray.length; i++) {
+      const item = outputArray[i];
       if (!item || typeof item !== 'object') continue;
+      
+      console.log(`📦 ray-live: Processing output item ${i + 1}/${outputArray.length}`);
       
       // Check if item has content array
       const contentArray = Array.isArray(item.content) ? item.content : [];
+      console.log(`📦 ray-live: Item ${i + 1} has ${contentArray.length} content items`);
       
       // Scan through content array
-      for (const c of contentArray) {
+      for (let j = 0; j < contentArray.length; j++) {
+        const c = contentArray[j];
         if (!c || typeof c !== 'object') continue;
         
+        console.log(`📦 ray-live: Content item ${j + 1} type: ${c.type}`);
+        
         // Log web_search calls for observability
-        if (c.type === "web_search_call") {
-          const searchQuery = c.action?.query || c.query || 'unknown';
+        if (c.type === "web_search_call" || c.type === "web_search_preview_call") {
+          webSearchWasCalled = true;
+          const searchQuery = c.action?.query || c.query || c.search_query || 'unknown';
+          webSearchQueries.push(searchQuery);
           console.log(`[web_search] ${new Date().toISOString()} | query: "${searchQuery}"`);
+          console.log(`[web_search] Full web_search object:`, JSON.stringify(c).substring(0, 500));
           continue;
         }
         
@@ -322,9 +341,17 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
           // Ensure we're not accidentally getting a JSON string
           if (!textValue.startsWith('{') || !textValue.includes('"type":"web_search_call"')) {
             textItems.push(textValue);
+            console.log(`📦 ray-live: Collected output_text item ${textItems.length}, preview: "${textValue.substring(0, 100)}"`);
           }
         }
       }
+    }
+    
+    // Log web_search status
+    if (webSearchWasCalled) {
+      console.log(`✅ [web_search] WAS CALLED with ${webSearchQueries.length} query/queries:`, webSearchQueries);
+    } else {
+      console.log(`⚠️ [web_search] WAS NOT CALLED - model answered from training data`);
     }
     
     // Use the LAST output_text item (final answer comes after tool calls)
