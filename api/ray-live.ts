@@ -95,12 +95,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  // Check x-app-token header (same as /api/ray)
-  const appToken = req.headers['x-app-token'];
-  if (appToken !== process.env.APP_TOKEN) {
-    console.log('❌ Unauthorized request to /api/ray-live');
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  // NOTE: /api/ray-live does NOT require X-App-Token for easy testing
+  // This is intentional - /api/ray still requires it for production use
 
   try {
     console.log('🌐 ray-live: Received request');
