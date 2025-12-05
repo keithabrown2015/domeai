@@ -12,6 +12,7 @@ struct ChatView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var micButtonScale: CGFloat = 1.0
     @State private var pendingDeleteMessage: Message? = nil
+    @State private var showScrollButton = false
     
     var body: some View {
         NavigationStack {
@@ -26,6 +27,25 @@ struct ChatView: View {
                         ScrollViewReader { proxy in
                             ScrollView {
                                 VStack(spacing: 8) {
+                                    // Scroll position detector at top (visually bottom)
+                                    GeometryReader { geo -> Color in
+                                        let frame = geo.frame(in: .global)
+                                        // With inverted scroll, when user scrolls up, this detector moves down
+                                        // Show button when detector is below screen (user scrolled up)
+                                        let isScrolledUp = frame.minY > UIScreen.main.bounds.height + 200
+                                        
+                                        DispatchQueue.main.async {
+                                            if showScrollButton != isScrolledUp {
+                                                withAnimation(.easeInOut(duration: 0.2)) {
+                                                    showScrollButton = isScrolledUp
+                                                }
+                                            }
+                                        }
+                                        
+                                        return Color.clear
+                                    }
+                                    .frame(height: 1)
+                                    
                                     ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
                                         MessageWithTimestampView(
                                             message: message,
@@ -47,6 +67,22 @@ struct ChatView: View {
                                 .padding(.vertical, 12)
                             }
                             .rotationEffect(.degrees(180))
+                            .onAppear {
+                                // Ensure we start at bottom when view appears
+                                if let firstMessage = viewModel.messages.first {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        proxy.scrollTo(firstMessage.id, anchor: .top)
+                                    }
+                                }
+                            }
+                            .onChange(of: viewModel.messages.count) { _, _ in
+                                // Auto-scroll to bottom when new message arrives
+                                if let firstMessage = viewModel.messages.first {
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        proxy.scrollTo(firstMessage.id, anchor: .top)
+                                    }
+                                }
+                            }
                             .onChange(of: viewModel.isProcessing) { _, isProcessing in
                                 if isProcessing {
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -57,24 +93,27 @@ struct ChatView: View {
                                 }
                             }
                             .overlay(alignment: .bottom) {
-                                Button(action: {
-                                    if let firstMessage = viewModel.messages.first {
-                                        withAnimation {
-                                            proxy.scrollTo(firstMessage.id, anchor: .top)
+                                if showScrollButton {
+                                    Button(action: {
+                                        if let firstMessage = viewModel.messages.first {
+                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                                proxy.scrollTo(firstMessage.id, anchor: .top)
+                                            }
+                                        }
+                                    }) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(.ultraThinMaterial)
+                                                .frame(width: 44, height: 44)
+                                                .shadow(color: .black.opacity(0.3), radius: 6)
+                                            Image(systemName: "chevron.down")
+                                                .font(.system(size: 18, weight: .semibold))
+                                                .foregroundColor(.white)
                                         }
                                     }
-                                }) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(.ultraThinMaterial)
-                                            .frame(width: 44, height: 44)
-                                            .shadow(color: .black.opacity(0.3), radius: 6)
-                                        Image(systemName: "chevron.down")
-                                            .font(.system(size: 18, weight: .semibold))
-                                            .foregroundColor(.white)
-                                    }
+                                    .padding(.bottom, 80)
+                                    .transition(.opacity.combined(with: .scale))
                                 }
-                                .padding(.bottom, 80)
                             }
                         }
                         
