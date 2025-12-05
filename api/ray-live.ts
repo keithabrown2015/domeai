@@ -90,7 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     // App token gate - check at the very top
     const appToken = req.headers['x-ray-app-token'];
-    if (!appToken || appToken !== process.env.RAY_APP_TOKEN) {
+    if (!appToken || appToken !== process.env.APP_TOKEN) {
       return res.status(401).json({ 
         ok: false, 
         tier: 3,
