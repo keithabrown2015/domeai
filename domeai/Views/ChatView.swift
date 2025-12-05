@@ -13,26 +13,6 @@ struct ChatView: View {
     @State private var micButtonScale: CGFloat = 1.0
     @State private var pendingDeleteMessage: Message? = nil
     
-    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool = true) {
-        guard let lastMessage = viewModel.messages.last else { return }
-        
-        let scrollAction = {
-            if animated {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
-                }
-            } else {
-                proxy.scrollTo(lastMessage.id, anchor: .bottom)
-            }
-        }
-        
-        // Scroll multiple times to ensure it works after layout completes
-        scrollAction()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { scrollAction() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { scrollAction() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { scrollAction() }
-    }
-    
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
@@ -45,7 +25,7 @@ struct ChatView: View {
                         // Main chat area
                         ScrollViewReader { proxy in
                             ScrollView {
-                                LazyVStack(spacing: 8) {
+                                VStack(spacing: 8) {
                                     ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
                                         MessageWithTimestampView(
                                             message: message,
@@ -53,35 +33,36 @@ struct ChatView: View {
                                             maxWidth: geometry.size.width * 0.75
                                         )
                                         .id(message.id)
+                                        .rotationEffect(.degrees(180))
                                     }
                                     
                                     if viewModel.isProcessing {
                                         TypingIndicatorBubble()
                                             .id("thinking")
                                             .transition(.opacity.combined(with: .scale))
+                                            .rotationEffect(.degrees(180))
                                     }
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
                             }
-                            .onAppear {
-                                scrollToBottom(proxy: proxy, animated: false)
-                            }
-                            .onChange(of: viewModel.messages.count) { _, _ in
-                                scrollToBottom(proxy: proxy)
-                            }
+                            .rotationEffect(.degrees(180))
                             .onChange(of: viewModel.isProcessing) { _, isProcessing in
                                 if isProcessing {
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                         withAnimation {
-                                            proxy.scrollTo("thinking", anchor: .bottom)
+                                            proxy.scrollTo("thinking", anchor: .top)
                                         }
                                     }
                                 }
                             }
                             .overlay(alignment: .bottom) {
                                 Button(action: {
-                                    scrollToBottom(proxy: proxy)
+                                    if let firstMessage = viewModel.messages.first {
+                                        withAnimation {
+                                            proxy.scrollTo(firstMessage.id, anchor: .top)
+                                        }
+                                    }
                                 }) {
                                     ZStack {
                                         Circle()
