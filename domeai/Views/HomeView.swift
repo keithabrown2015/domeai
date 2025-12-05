@@ -423,22 +423,37 @@ struct HomeView: View {
         .onChange(of: showScrollButton) { oldValue, newValue in
             print("🔍 showScrollButton changed: \(oldValue) -> \(newValue)")
         }
-        .overlay(alignment: .bottomTrailing) {
-            Button(action: {
-                print("ARROW TAPPED")
-            }) {
-                ZStack {
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 50, height: 50)
-                    Image(systemName: "arrow.down")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.white)
+        .overlay(alignment: .bottom) {
+            // Floating scroll to bottom button - centered above input field
+            if showScrollButton {
+                Button(action: {
+                    print("ARROW TAPPED - Scrolling to bottom")
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        scrollProxy?.scrollTo("bottom", anchor: .bottom)
+                    }
+                    // Hide button after scrolling
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showScrollButton = false
+                        }
+                    }
+                }) {
+                    ZStack {
+                        // iOS-style blur background
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                            .frame(width: 44, height: 44)
+                            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
+                        
+                        // Down arrow icon
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.primary)
+                    }
                 }
-                .shadow(color: .black.opacity(0.4), radius: 6)
+                .padding(.bottom, 70) // Position just above input field
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
-            .padding(.trailing, 20)
-            .padding(.bottom, 100)
         }
     }
     
