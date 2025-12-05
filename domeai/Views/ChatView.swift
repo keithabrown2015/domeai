@@ -12,7 +12,26 @@ struct ChatView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var micButtonScale: CGFloat = 1.0
     @State private var pendingDeleteMessage: Message? = nil
-    @State private var showScrollButton = false
+    
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool = true) {
+        guard let lastMessage = viewModel.messages.last else { return }
+        
+        let scrollAction = {
+            if animated {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+            }
+        }
+        
+        // Scroll multiple times to ensure it works after layout completes
+        scrollAction()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { scrollAction() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { scrollAction() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { scrollAction() }
+    }
     
     var body: some View {
         NavigationStack {
@@ -36,74 +55,45 @@ struct ChatView: View {
                                         .id(message.id)
                                     }
                                     
-                                    // Ray is thinking indicator
                                     if viewModel.isProcessing {
                                         TypingIndicatorBubble()
                                             .id("thinking")
                                             .transition(.opacity.combined(with: .scale))
                                     }
-                                    
-                                    // Bottom anchor with visibility detector
-                                    GeometryReader { geo -> Color in
-                                        DispatchQueue.main.async {
-                                            let show = geo.frame(in: .global).minY > UIScreen.main.bounds.height
-                                            if show != showScrollButton {
-                                                withAnimation(.easeInOut(duration: 0.2)) {
-                                                    showScrollButton = show
-                                                }
-                                            }
-                                        }
-                                        return Color.clear
-                                    }
-                                    .frame(height: 1)
-                                    .id("bottomAnchor")
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
                             }
                             .onAppear {
-                                // Scroll to bottom when chat opens
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    proxy.scrollTo("bottomAnchor", anchor: .top)
-                                }
+                                scrollToBottom(proxy: proxy, animated: false)
                             }
                             .onChange(of: viewModel.messages.count) { _, _ in
-                                if let lastMessage = viewModel.messages.last {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                                        proxy.scrollTo("bottomAnchor", anchor: .top)
-                                    }
-                                }
+                                scrollToBottom(proxy: proxy)
                             }
                             .onChange(of: viewModel.isProcessing) { _, isProcessing in
                                 if isProcessing {
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                                        withAnimation {
                                             proxy.scrollTo("thinking", anchor: .bottom)
                                         }
                                     }
                                 }
                             }
                             .overlay(alignment: .bottom) {
-                                // Scroll to bottom button
-                                if showScrollButton {
-                                    Button(action: {
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                            proxy.scrollTo("bottomAnchor", anchor: .top)
-                                        }
-                                    }) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(.ultraThinMaterial)
-                                                .frame(width: 44, height: 44)
-                                                .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 2)
-                                            Image(systemName: "chevron.down")
-                                                .font(.system(size: 18, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        }
+                                Button(action: {
+                                    scrollToBottom(proxy: proxy)
+                                }) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(.ultraThinMaterial)
+                                            .frame(width: 44, height: 44)
+                                            .shadow(color: .black.opacity(0.3), radius: 6)
+                                        Image(systemName: "chevron.down")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundColor(.white)
                                     }
-                                    .padding(.bottom, 80)
-                                    .transition(.opacity)
                                 }
+                                .padding(.bottom, 80)
                             }
                         }
                         
