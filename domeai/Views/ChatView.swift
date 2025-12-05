@@ -12,8 +12,6 @@ import Combine
 struct ChatView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var micButtonScale: CGFloat = 1.0
-    @State private var pendingDeleteMessage: Message? = nil
-    @State private var shouldAutoScroll = true
     
     var body: some View {
         NavigationStack {
@@ -41,52 +39,15 @@ struct ChatView: View {
                                         TypingIndicatorBubble()
                                             .id("typing-indicator")
                                     }
-                                    
-                                    // Invisible anchor at the very bottom
-                                    Color.clear
-                                        .frame(height: 1)
-                                        .id("bottom")
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
                             }
-                            // iOS 17+ default anchor
-                            .defaultScrollAnchor(.bottom)
-                            // Scroll to bottom when view first appears
                             .onAppear {
-                                scrollToBottom(proxy: proxy, animated: false)
+                                scrollToBottom(proxy: proxy)
                             }
-                            // Scroll to bottom when messages change
                             .onChange(of: viewModel.messages.count) { _, _ in
-                                scrollToBottom(proxy: proxy, animated: true)
-                            }
-                            // Scroll to bottom when processing state changes (typing indicator appears)
-                            .onChange(of: viewModel.isProcessing) { _, isProcessing in
-                                if isProcessing {
-                                    scrollToBottom(proxy: proxy, animated: true)
-                                }
-                            }
-                            // Extra insurance: scroll after a delay to handle async message loading
-                            .task {
-                                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-                                await MainActor.run {
-                                    scrollToBottom(proxy: proxy, animated: false)
-                                }
-                            }
-                            .overlay(alignment: .bottomTrailing) {
-                                // Scroll to bottom button
-                                Button {
-                                    scrollToBottom(proxy: proxy, animated: true)
-                                } label: {
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .frame(width: 44, height: 44)
-                                        .background(Circle().fill(Color.blue))
-                                        .shadow(radius: 4)
-                                }
-                                .padding(.trailing, 16)
-                                .padding(.bottom, 16)
+                                scrollToBottom(proxy: proxy)
                             }
                         }
                         
@@ -170,14 +131,11 @@ struct ChatView: View {
     }
     
     // MARK: - Scroll Helper
-    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        guard let last = viewModel.messages.last else { return }
         DispatchQueue.main.async {
-            if animated {
-                withAnimation(.easeOut(duration: 0.25)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            } else {
-                proxy.scrollTo("bottom", anchor: .bottom)
+            withAnimation {
+                proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
     }
