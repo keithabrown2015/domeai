@@ -336,13 +336,13 @@ struct HomeView: View {
                                 .padding(.top, 12)
                                 .id("thinking")
                         }
-                        
-                        // Bottom anchor for scrolling
-                        Color.clear
-                            .frame(height: 1)
-                            .id("bottom")
                     }
                     .padding()
+                    
+                    // Bottom anchor - MUST be last, after everything including padding
+                    Color.clear
+                        .frame(height: 1)
+                        .id("bottom")
                 }
                 .defaultScrollAnchor(.bottom)
                 .onAppear {
