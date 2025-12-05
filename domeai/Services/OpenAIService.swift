@@ -11,7 +11,7 @@ import UIKit
 class OpenAIService {
     static let shared = OpenAIService()
     
-    private let rayRelayURL = "\(Config.vercelBaseURL)/api/ray"
+    private let rayRelayURL = "\(Config.vercelBaseURL)/api/ray-live"
     private let visionURL = "\(Config.vercelBaseURL)/api/vision"
     
     private init() {}

@@ -231,7 +231,6 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
 
     const responseData = await response.json();
     console.log('📦 ray-live: Responses API response received');
-    console.log('📦 ray-live: Response structure keys:', Object.keys(responseData));
     
     // Extract the first text output from the Responses API result
     let replyText = "Sorry, I couldn't generate a reply.";
@@ -251,10 +250,9 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
     } else if (firstContent && firstContent.message && typeof firstContent.message === "string") {
       replyText = firstContent.message;
     } else {
-      console.error('❌ ray-live: Could not extract text from response structure');
-      console.error('❌ ray-live: firstOutput:', JSON.stringify(firstOutput).substring(0, 500));
-      console.error('❌ ray-live: firstContent:', JSON.stringify(firstContent).substring(0, 500));
-      throw new Error('Could not extract reply text from Responses API response');
+      // Last resort: stringify but still extract what we can
+      console.warn('⚠️ ray-live: Using fallback extraction');
+      replyText = JSON.stringify(firstContent ?? firstOutput ?? responseData);
     }
 
     if (!replyText || replyText.trim().length === 0) {
@@ -274,10 +272,10 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
       }
     }
 
-    console.log('✅ ray-live: Reply generated:', replyText.substring(0, 100));
+    console.log("ray-live reply:", replyText.substring(0, 200));
     console.log('✅ ray-live: Sources count:', sources.length);
 
-    // Return response in same format as /api/ray
+    // Return response in same format as /api/ray (matching exact shape)
     return res.status(200).json({
       ok: true,
       tier: 3,
