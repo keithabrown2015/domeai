@@ -385,40 +385,6 @@ struct HomeView: View {
                     }
                 }
             }
-            
-            // Floating scroll to bottom button - MUST be last in ZStack to render on top
-            // TEMPORARY: Always show for debugging
-            Button {
-                print("🔍 Scroll button tapped!")
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                    scrollProxy?.scrollTo("bottom", anchor: .bottom)
-                }
-                // Hide button after scrolling
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showScrollButton = false
-                    }
-                }
-            } label: {
-                ZStack {
-                    // TEMPORARY: Bright red background for debugging visibility
-                    Circle()
-                        .fill(Color.red.opacity(0.9))
-                        .frame(width: 44, height: 44)
-                        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 2)
-                    
-                    // Down arrow icon
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.white)
-                }
-            }
-            .padding(.trailing, 16)
-            .padding(.bottom, 100) // Position above input bar
-            .opacity(showScrollButton ? 1.0 : 0.0) // Fade based on state
-            .allowsHitTesting(showScrollButton) // Only tappable when visible
-            .transition(.opacity.combined(with: .scale(scale: 0.8)))
-            .zIndex(1000) // Ensure it's on top
         }
         .onChange(of: showScrollButton) { oldValue, newValue in
             print("🔍 showScrollButton changed: \(oldValue) -> \(newValue)")
