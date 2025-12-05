@@ -87,10 +87,20 @@ function formatUserProfile(userProfile: string | undefined): string {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // NOTE: /api/ray-live does NOT require X-App-Token for easy testing
-  // This is intentional - /api/ray still requires it for production use
-
   try {
+    // App token gate - check at the very top
+    const appToken = req.headers['x-ray-app-token'];
+    if (!appToken || appToken !== process.env.RAY_APP_TOKEN) {
+      return res.status(401).json({ 
+        ok: false, 
+        tier: 3,
+        model: 'ray-live-error',
+        message: 'Unauthorized',
+        reasoning: null,
+        sources: []
+      });
+    }
+
     // Only accept POST requests
     if (req.method !== 'POST') {
       return res.status(405).json({
@@ -153,17 +163,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const userProfileSection = formatUserProfile(userProfile);
     const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${userProfileSection}
 
-Today's date is: ${isoNow}. When the user says things like 'this week', 'yesterday', 'last night', 'today', or 'recent', interpret them relative to this date and year.
+Today's date is: ${isoNow}. Interpret 'this week', 'yesterday', 'last night' relative to this date.
 
-You excel at answering questions about current events, news, live data, recent happenings, and real-time information. Use web search to find the most current information available.
+You excel at answering questions about current events, news, live data, recent happenings, and real-time information.
+
+WHEN TO USE web_search TOOL:
+- Only use web_search when the user asks about "today", "this week", "current", "live", "latest", "recent", or similar time-sensitive terms
+- Only use web_search when the answer depends on recent information that you wouldn't know from your training data
+- For general knowledge questions that don't require current information, answer directly without web_search
 
 CRITICAL RULES FOR web_search TOOL:
-- NEVER include "2023" or "November 2023" or any 2023 date in your search queries unless the user explicitly mentions 2023.
-- NEVER default to past years. The current year is ${now.getFullYear()}.
-- Only include a specific year (like 2023, 2024, or 2025) in the search query if the user explicitly says that year.
-- For questions about "this week", "yesterday", "last night", "today", or "recent", build a query using the CURRENT year (${now.getFullYear()}) and appropriate time period based on today's date (${isoNow}).
-- For questions like "this week's Monday Night Football game", build a query like "NFL Monday Night Football ${now.getFullYear()} this week" or "NFL Monday Night Football score and teams" - do NOT add "November 2023" or any hard-coded past date.
-- When building search queries, focus on the topic and use relative time words (this week, today, recent) rather than specific dates unless the user provided them.
+- Do NOT default to the year 2023 or any past year
+- Only include a specific year in the search query if the user explicitly mentions that year
+- For 'this week' queries, use today's date (${isoNow}) to determine the correct timeframe
+- When building search queries, focus on the topic and use relative time words (this week, today, recent) rather than specific dates unless the user provided them
+- Example: For "this week's Monday Night Football game", build a query like "NFL Monday Night Football this week" or "NFL Monday Night Football score and teams" - do NOT add hard-coded dates
 
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
@@ -281,8 +295,15 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
       for (const c of contentArray) {
         if (!c || typeof c !== 'object') continue;
         
-        // Skip web_search_call objects completely - NEVER use these
-        if (c.type === "web_search_call" || c.type === "tool_call" || c.type === "tool_use") {
+        // Log web_search calls for observability
+        if (c.type === "web_search_call") {
+          const searchQuery = c.action?.query || c.query || 'unknown';
+          console.log(`[web_search] ${new Date().toISOString()} | query: "${searchQuery}"`);
+          continue;
+        }
+        
+        // Skip other tool call objects
+        if (c.type === "tool_call" || c.type === "tool_use") {
           continue;
         }
         
