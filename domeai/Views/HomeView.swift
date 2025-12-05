@@ -348,9 +348,16 @@ struct HomeView: View {
                 }
                 .coordinateSpace(name: "scroll")
                 .onPreferenceChange(ViewOffsetKey.self) { offset in
+                    // Debug: Print offset to see what values we're getting
+                    print("🔍 Scroll offset: \(offset)")
+                    
                     // Show button when scrolled up more than 100 points from bottom
+                    // Negative offset means we're scrolled down from the top
+                    let shouldShow = offset < -100
+                    print("🔍 Should show scroll button: \(shouldShow), current showScrollButton: \(showScrollButton)")
+                    
                     withAnimation(.easeInOut(duration: 0.2)) {
-                        showScrollButton = offset < -100
+                        showScrollButton = shouldShow
                     }
                 }
                 .onAppear {
@@ -364,15 +371,18 @@ struct HomeView: View {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
                     // Hide button when new message arrives and auto-scrolls
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showScrollButton = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showScrollButton = false
+                        }
                     }
                 }
             }
             
-            // Floating scroll to bottom button
+            // Floating scroll to bottom button - MUST be last in ZStack to render on top
             if showScrollButton {
                 Button {
+                    print("🔍 Scroll button tapped!")
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         scrollProxy?.scrollTo("bottom", anchor: .bottom)
                     }
@@ -384,22 +394,26 @@ struct HomeView: View {
                     }
                 } label: {
                     ZStack {
-                        // iOS-style blur background
+                        // TEMPORARY: Bright red background for debugging visibility
                         Circle()
-                            .fill(.ultraThinMaterial)
+                            .fill(Color.red.opacity(0.9))
                             .frame(width: 44, height: 44)
-                            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
+                            .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 2)
                         
                         // Down arrow icon
                         Image(systemName: "chevron.down")
                             .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(.primary)
+                            .foregroundColor(.white)
                     }
                 }
                 .padding(.trailing, 16)
-                .padding(.bottom, 100) // Position above input bar (input bar ~84pt + safe margin)
+                .padding(.bottom, 100) // Position above input bar
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                .zIndex(1000) // Ensure it's on top
             }
+        }
+        .onChange(of: showScrollButton) { oldValue, newValue in
+            print("🔍 showScrollButton changed: \(oldValue) -> \(newValue)")
         }
     }
     
