@@ -145,11 +145,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }))
       : undefined;
 
+    // Get current date for system prompt
+    const now = new Date();
+    const isoNow = now.toISOString();
+
     // Build system prompt with userProfile
     const userProfileSection = formatUserProfile(userProfile);
     const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${userProfileSection}
 
+Today's date is: ${isoNow}. When the user says things like 'this week', 'yesterday', 'last night', 'today', or 'recent', interpret them relative to this date and year.
+
 You excel at answering questions about current events, news, live data, recent happenings, and real-time information. Use web search to find the most current information available.
+
+IMPORTANT: When using the web_search tool:
+- Do NOT default to the year 2023 or any past year unless the user explicitly mentions a specific year.
+- Only include a specific year (like 2023, 2024, or 2025) in the search query if the user actually says a year.
+- For questions about "this week", "yesterday", "last night", or similar relative time references, build a query that uses the current year (from ${isoNow}) and the appropriate time period based on today's date.
+- For questions like "this week's Monday Night Football game" or "today's news", use the current date to determine what week/month/year to search for.
 
 CRITICAL: You MUST follow this EXACT 4-part structure for EVERY SINGLE response. Do not deviate from this format.
 
