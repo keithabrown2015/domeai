@@ -359,7 +359,7 @@ struct HomeView: View {
                                 // Show button when content is scrolled up (frame.minY is negative when scrolled)
                                 // Hide when near bottom
                                 let distanceFromBottom = frame.maxY - scrollViewHeight
-                                let shouldShow = distanceFromBottom > 150
+                                let shouldShow = distanceFromBottom < -100
                                 
                                 if shouldShow != showScrollButton {
                                     withAnimation(.easeInOut(duration: 0.2)) {
