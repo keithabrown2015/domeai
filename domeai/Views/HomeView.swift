@@ -348,7 +348,8 @@ struct HomeView: View {
                 }
                 .coordinateSpace(name: "scroll")
                 .onPreferenceChange(ViewOffsetKey.self) { offset in
-                    withAnimation {
+                    // Show button when scrolled up more than 100 points from bottom
+                    withAnimation(.easeInOut(duration: 0.2)) {
                         showScrollButton = offset < -100
                     }
                 }
@@ -359,32 +360,45 @@ struct HomeView: View {
                     }
                 }
                 .onChange(of: chatViewModel.messages.count) { _, _ in
-                    withAnimation {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         proxy.scrollTo("bottom", anchor: .bottom)
                     }
-                    showScrollButton = false
+                    // Hide button when new message arrives and auto-scrolls
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showScrollButton = false
+                    }
                 }
             }
             
+            // Floating scroll to bottom button
             if showScrollButton {
                 Button {
-                    withAnimation(.spring()) {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         scrollProxy?.scrollTo("bottom", anchor: .bottom)
+                    }
+                    // Hide button after scrolling
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showScrollButton = false
+                        }
                     }
                 } label: {
                     ZStack {
+                        // iOS-style blur background
                         Circle()
-                            .fill(Color.blue)
-                            .frame(width: 56, height: 56)
-                            .shadow(color: .black.opacity(0.3), radius: 8)
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.system(size: 40))
-                            .foregroundColor(.white)
+                            .fill(.ultraThinMaterial)
+                            .frame(width: 44, height: 44)
+                            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 2)
+                        
+                        // Down arrow icon
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.primary)
                     }
                 }
-                .padding(.trailing, 20)
-                .padding(.bottom, 140)
-                .transition(.scale.combined(with: .opacity))
+                .padding(.trailing, 16)
+                .padding(.bottom, 16)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
     }
