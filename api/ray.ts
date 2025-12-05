@@ -22,7 +22,7 @@ function userRequestedEmail(userMessage: string): boolean {
   );
 }
 
-// Helper function to answer user question ALWAYS using OpenAI Responses API with web_search tool
+// Helper function to answer user question ALWAYS using OpenAI Chat Completions with web_search tool
 async function answerUserQuestionWithWebSearch(
   userMessage: string,
   conversationHistory: ChatMessage[] | undefined,
@@ -32,31 +32,16 @@ async function answerUserQuestionWithWebSearch(
 ): Promise<{ message: string; sources: string[] }> {
   console.log("Ray called OpenAI with web_search for this message:", userMessage.substring(0, 100));
 
-  // Try Responses API first, but fallback gracefully to Chat Completions
   try {
-    // Build input array with system prompt and conversation history
-    const inputMessages: Array<{ role: string; content: string }> = [];
-    
-    // Add system prompt if provided
-    if (systemPrompt) {
-      inputMessages.push({
-        role: 'system',
-        content: systemPrompt
-      });
-    }
-    
-    // Add conversation history
-    if (conversationHistory && conversationHistory.length > 0) {
-      inputMessages.push(...conversationHistory);
-    }
-    
-    // Add current user message
-    inputMessages.push({
-      role: 'user',
-      content: userMessage
+    // Build messages array with system prompt and conversation history
+    const messages = buildChatMessages({
+      systemPrompt,
+      conversationHistory,
+      newUserMessage: userMessage
     });
-    
-    const response = await fetch('https://api.openai.com/v1/responses', {
+
+    // Use Chat Completions API with web_search tool
+    const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -64,119 +49,42 @@ async function answerUserQuestionWithWebSearch(
       },
       body: JSON.stringify({
         model: model,
+        messages: messages,
         tools: [{ type: 'web_search' }],
-        input: inputMessages
+        temperature: 0.7,
+        max_tokens: 2000
       })
     });
 
-    if (response.ok) {
-      const responseData = await response.json();
-      console.log('📦 Responses API response structure:', JSON.stringify(responseData).substring(0, 500));
-      
-      // Try multiple ways to extract the text
-      let text: string = '';
-      let sources: string[] = [];
-      
-      // Method 1: Check for output_text directly
-      if (responseData.output_text && typeof responseData.output_text === 'string') {
-        text = responseData.output_text;
-      }
-      // Method 2: Check for output array with content
-      else if (responseData.output && Array.isArray(responseData.output) && responseData.output.length > 0) {
-        const firstOutput = responseData.output[0];
-        if (firstOutput.content && Array.isArray(firstOutput.content) && firstOutput.content.length > 0) {
-          const firstContent = firstOutput.content[0];
-          if (firstContent.type === 'output_text' && firstContent.text) {
-            text = firstContent.text;
-          } else if (firstContent.message && typeof firstContent.message === 'string') {
-            text = firstContent.message;
-          } else if (typeof firstContent === 'string') {
-            text = firstContent;
-          } else {
-            text = JSON.stringify(firstContent);
-          }
-        } else if (firstOutput.text && typeof firstOutput.text === 'string') {
-          text = firstOutput.text;
-        } else if (typeof firstOutput === 'string') {
-          text = firstOutput;
-        }
-      }
-      // Method 3: Check for message field
-      else if (responseData.message && typeof responseData.message === 'string') {
-        text = responseData.message;
-      }
-      
-      // Extract sources
-      if (responseData.sources && Array.isArray(responseData.sources)) {
-        sources = responseData.sources;
-      }
-      
-      if (text) {
-        console.log('✅ OpenAI Responses API with web_search completed');
-        return { message: text, sources };
-      } else {
-        console.warn('⚠️ Responses API returned OK but no text found, falling back');
-        throw new Error('No text found in Responses API response');
-      }
-    } else {
-      // Responses API returned error
-      const errorText = await response.text().catch(() => 'Unknown error');
-      console.error(`❌ Responses API error: ${response.status} - ${errorText}`);
-      throw new Error(`Responses API returned ${response.status}: ${errorText}`);
+    if (!chatResponse.ok) {
+      const errorText = await chatResponse.text();
+      console.error(`❌ Chat Completions API error: ${chatResponse.status} - ${errorText}`);
+      throw new Error(`OpenAI Chat Completions API error: ${chatResponse.status} - ${errorText}`);
     }
-  } catch (error: any) {
-    console.log('⚠️ Responses API not available or failed, falling back to Chat Completions');
-    console.error('OpenAI error in Ray handler:', error);
+
+    const chatData = await chatResponse.json();
+    console.log('📦 Chat Completions response structure:', JSON.stringify(chatData).substring(0, 500));
     
-    // Fallback: Use Chat Completions API with web search instructions
-    try {
-      const messages = buildChatMessages({
-        systemPrompt: systemPrompt + '\n\nIMPORTANT: Use current, up-to-date information from web sources when answering. Search the web for recent information if needed.',
-        conversationHistory,
-        newUserMessage: userMessage
-      });
-
-      const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${openaiApiKey}`
-        },
-        body: JSON.stringify({
-          model: model,
-          messages,
-          temperature: 0.7,
-          max_tokens: 2000
-        })
-      });
-
-      if (!chatResponse.ok) {
-        const errorText = await chatResponse.text();
-        console.error(`❌ Chat Completions API error: ${chatResponse.status} - ${errorText}`);
-        throw new Error(`OpenAI Chat Completions API error: ${chatResponse.status} - ${errorText}`);
-      }
-
-      const chatData = await chatResponse.json();
-      const message = extractContent(chatData);
-      
-      if (!message) {
-        throw new Error('No message content returned from Chat Completions API');
-      }
-      
-      // Try to extract URLs from the response text
-      const sources: string[] = [];
-      const urlRegex = /https?:\/\/[^\s]+/g;
-      const matches = message.match(urlRegex);
-      if (matches) {
-        sources.push(...matches.slice(0, 5));
-      }
-
-      console.log('✅ Fallback Chat Completions response generated');
-      return { message, sources };
-    } catch (fallbackError: any) {
-      console.error('❌ Both Responses API and Chat Completions failed:', fallbackError);
-      throw fallbackError;
+    const message = extractContent(chatData);
+    
+    if (!message) {
+      throw new Error('No message content returned from Chat Completions API');
     }
+    
+    // Try to extract URLs from the response text
+    const sources: string[] = [];
+    const urlRegex = /https?:\/\/[^\s]+/g;
+    const matches = message.match(urlRegex);
+    if (matches) {
+      sources.push(...matches.slice(0, 5));
+    }
+
+    console.log('✅ Chat Completions with web_search completed');
+    return { message, sources };
+  } catch (error: any) {
+    console.error('❌ OpenAI error in Ray handler:', error);
+    console.error('❌ Error stack:', error.stack);
+    throw error;
   }
 }
 
@@ -747,12 +655,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Prepare conversationHistory for sliding window processing
     // Extract only role and content fields (ignore chatSessionId and other metadata)
     // buildChatMessages will handle undefined/null, but we normalize it here for type safety
-    const conversationHistoryArray: ChatMessage[] | undefined = Array.isArray(conversationHistory)
-      ? conversationHistory.map(msg => ({
-          role: msg.role as "user" | "assistant",
-          content: msg.content
-        }))
-      : undefined;
+    let conversationHistoryArray: ChatMessage[] | undefined;
+    try {
+      conversationHistoryArray = Array.isArray(conversationHistory)
+        ? conversationHistory.map(msg => {
+            // Safely extract role and content with validation
+            const role = msg?.role;
+            const content = msg?.content;
+            
+            if (!role || !content) {
+              console.warn('⚠️ Invalid message in conversationHistory:', JSON.stringify(msg));
+              return null;
+            }
+            
+            if (role !== 'user' && role !== 'assistant' && role !== 'system') {
+              console.warn('⚠️ Invalid role in conversationHistory:', role);
+              return null;
+            }
+            
+            return {
+              role: role as "user" | "assistant" | "system",
+              content: String(content)
+            };
+          }).filter((msg): msg is ChatMessage => msg !== null)
+        : undefined;
+    } catch (error: any) {
+      console.error('❌ Error processing conversationHistory:', error);
+      console.error('❌ conversationHistory value:', JSON.stringify(conversationHistory));
+      // Continue with empty history if processing fails
+      conversationHistoryArray = undefined;
+    }
     
     console.log('📥 Received conversationHistory length:', conversationHistoryArray?.length ?? 0);
     console.log('📥 Chat Session ID:', currentChatSessionId);
@@ -771,18 +703,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('🎯 Ray processing query:', userQuery);
 
     // TIER CLASSIFICATION: Determine which tier to use
-    const classificationResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openaiApiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `You are Ray's routing system. Analyze the user's query and determine which tier to use.
+    let tier = 1;
+    let reasoning = 'Defaulting to Tier 1';
+    
+    try {
+      const classificationResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiApiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `You are Ray's routing system. Analyze the user's query and determine which tier to use.
 
 Respond ONLY with valid JSON in this exact format:
 {"tier": 1 | 2 | 3, "reasoning": "brief explanation"}
@@ -794,50 +730,51 @@ TIER 2 (gpt-4o): Complex reasoning, coding help, architecture design, multi-step
 TIER 3 (OpenAI Web Search + gpt-4o): Current events, news, live data, "today/recent/current/latest", population stats, weather, stocks, sports scores, "is X down", real-time information, recent happenings
 
 Be decisive and choose the most appropriate tier.`
-          },
-          {
-            role: 'user',
-            content: userQuery
+            },
+            {
+              role: 'user',
+              content: userQuery
+            }
+          ],
+          temperature: 0.3,
+          max_tokens: 150,
+          response_format: { type: 'json_object' }
+        })
+      });
+
+      if (!classificationResponse.ok) {
+        const errorText = await classificationResponse.text();
+        console.error('❌ Tier classification error:', classificationResponse.status, errorText);
+        // Don't fail the request, just default to Tier 1
+        tier = 1;
+        reasoning = 'Tier classification failed, defaulting to Tier 1';
+      } else {
+        const classificationData = await classificationResponse.json();
+        const classificationText = extractContent(classificationData);
+        
+        if (!classificationText) {
+          console.error('❌ No content in tier classification response');
+          tier = 1;
+          reasoning = 'No classification content, defaulting to Tier 1';
+        } else {
+          try {
+            const classification = JSON.parse(classificationText);
+            tier = classification.tier || 1;
+            reasoning = classification.reasoning || 'No reasoning provided';
+          } catch (e) {
+            console.error('❌ Failed to parse tier classification JSON:', classificationText);
+            tier = 1;
+            reasoning = 'Failed to parse classification, defaulting to Tier 1';
           }
-        ],
-        temperature: 0.3,
-        max_tokens: 150,
-        response_format: { type: 'json_object' }
-      })
-    });
-
-    if (!classificationResponse.ok) {
-      const errorText = await classificationResponse.text();
-      console.error('❌ Tier classification error:', classificationResponse.status, errorText);
-      return res.status(classificationResponse.status).json({ 
-        error: 'OpenAI API error', 
-        status: classificationResponse.status,
-        details: errorText 
-      });
+        }
+      }
+    } catch (classificationError: any) {
+      console.error('❌ Error during tier classification:', classificationError);
+      console.error('❌ Classification error stack:', classificationError.stack);
+      // Default to Tier 1 and continue
+      tier = 1;
+      reasoning = 'Tier classification threw error, defaulting to Tier 1';
     }
-
-    const classificationData = await classificationResponse.json();
-    const classificationText = extractContent(classificationData);
-    
-    if (!classificationText) {
-      console.error('❌ No content in tier classification response');
-      return res.status(500).json({ 
-        error: 'Invalid OpenAI response', 
-        message: 'No content returned from tier classification model' 
-      });
-    }
-
-    let classification: { tier: number; reasoning: string };
-    try {
-      classification = JSON.parse(classificationText);
-    } catch (e) {
-      console.error('❌ Failed to parse tier classification JSON:', classificationText);
-      // Default to Tier 1 if parsing fails
-      classification = { tier: 1, reasoning: 'Failed to parse classification, defaulting to Tier 1' };
-    }
-
-    const tier = classification.tier || 1;
-    const reasoning = classification.reasoning || 'No reasoning provided';
 
     console.log(`🎯 Tier selected: ${tier} - ${reasoning}`);
 
@@ -852,12 +789,13 @@ Be decisive and choose the most appropriate tier.`
     
     // TIER 1: Simple queries with gpt-4o-mini (ALWAYS with web_search)
     if (tier === 1) {
-      console.log('🤖 Tier 1: Using gpt-4o-mini with web_search');
-      model = 'gpt-4o-mini';
-      
-      // Build system prompt with userProfile
-      const userProfileSection = formatUserProfile(userProfile);
-      const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${userProfileSection}
+      try {
+        console.log('🤖 Tier 1: Using gpt-4o-mini with web_search');
+        model = 'gpt-4o-mini';
+        
+        // Build system prompt with userProfile
+        const userProfileSection = formatUserProfile(userProfile);
+        const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${userProfileSection}
 
 EMAIL CAPABILITY: Ray can send emails to the user via the backend when requested. If the user asks to "email that" or "send this to my email", the server logic will automatically send the assistant's reply by email. Ray should NOT say he cannot send emails; he should just respond normally, while the backend sends the email.
 
@@ -907,26 +845,32 @@ REMEMBER:
 
 You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
 
-      const result = await answerUserQuestionWithWebSearch(
-        userQuery,
-        conversationHistoryArray,
-        systemPrompt,
-        openaiApiKey,
-        'gpt-4o-mini'
-      );
-      
-      message = result.message;
-      sources = result.sources;
-      console.log('✅ Tier 1 response generated with web_search');
+        const result = await answerUserQuestionWithWebSearch(
+          userQuery,
+          conversationHistoryArray,
+          systemPrompt,
+          openaiApiKey,
+          'gpt-4o-mini'
+        );
+        
+        message = result.message;
+        sources = result.sources;
+        console.log('✅ Tier 1 response generated with web_search');
+      } catch (tier1Error: any) {
+        console.error('❌ Tier 1 error:', tier1Error);
+        console.error('❌ Tier 1 error stack:', tier1Error.stack);
+        throw tier1Error;
+      }
     }
     // TIER 2: Complex queries with gpt-4o (ALWAYS with web_search)
     else if (tier === 2) {
-      console.log('🤖 Tier 2: Using gpt-4o with web_search');
-      model = 'gpt-4o';
-      
-      // Build system prompt with userProfile
-      const tier2UserProfileSection = formatUserProfile(userProfile);
-      const tier2SystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
+      try {
+        console.log('🤖 Tier 2: Using gpt-4o with web_search');
+        model = 'gpt-4o';
+        
+        // Build system prompt with userProfile
+        const tier2UserProfileSection = formatUserProfile(userProfile);
+        const tier2SystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.
 
 You excel at complex reasoning, coding, architecture, multi-step planning, and deep analysis. Provide thorough, well-reasoned responses.${tier2UserProfileSection}
 
@@ -978,26 +922,32 @@ REMEMBER:
 
 You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context and answer questions that reference previous messages.`;
 
-      const result = await answerUserQuestionWithWebSearch(
-        userQuery,
-        conversationHistoryArray,
-        tier2SystemPrompt,
-        openaiApiKey,
-        'gpt-4o'
-      );
-      
-      message = result.message;
-      sources = result.sources;
-      console.log('✅ Tier 2 response generated with web_search');
+        const result = await answerUserQuestionWithWebSearch(
+          userQuery,
+          conversationHistoryArray,
+          tier2SystemPrompt,
+          openaiApiKey,
+          'gpt-4o'
+        );
+        
+        message = result.message;
+        sources = result.sources;
+        console.log('✅ Tier 2 response generated with web_search');
+      } catch (tier2Error: any) {
+        console.error('❌ Tier 2 error:', tier2Error);
+        console.error('❌ Tier 2 error stack:', tier2Error.stack);
+        throw tier2Error;
+      }
     }
     // TIER 3: OpenAI Web Search + gpt-4o (ALWAYS with web_search)
     else if (tier === 3) {
-      console.log('🔍 Tier 3: Using OpenAI Web Search + gpt-4o with web_search');
-      model = 'openai-web-search';
-      
-      // Build system prompt with userProfile
-      const tier3UserProfileSection = formatUserProfile(userProfile);
-      const tier3SystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${tier3UserProfileSection}
+      try {
+        console.log('🔍 Tier 3: Using OpenAI Web Search + gpt-4o with web_search');
+        model = 'openai-web-search';
+        
+        // Build system prompt with userProfile
+        const tier3UserProfileSection = formatUserProfile(userProfile);
+        const tier3SystemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${tier3UserProfileSection}
 
 You excel at answering questions about current events, news, live data, recent happenings, and real-time information.
 
@@ -1049,18 +999,23 @@ REMEMBER:
 
 You have access to the recent conversation history below (last ${MAX_HISTORY_MESSAGES} messages). Use it to maintain context.`;
 
-      const result = await answerUserQuestionWithWebSearch(
-        userQuery,
-        conversationHistoryArray,
-        tier3SystemPrompt,
-        openaiApiKey,
-        'gpt-4o'
-      );
-      
-      message = result.message;
-      sources = result.sources;
-      console.log('✅ Tier 3 response generated with web_search');
-      console.log('🔍 Web search sources:', sources.length);
+        const result = await answerUserQuestionWithWebSearch(
+          userQuery,
+          conversationHistoryArray,
+          tier3SystemPrompt,
+          openaiApiKey,
+          'gpt-4o'
+        );
+        
+        message = result.message;
+        sources = result.sources;
+        console.log('✅ Tier 3 response generated with web_search');
+        console.log('🔍 Web search sources:', sources.length);
+      } catch (tier3Error: any) {
+        console.error('❌ Tier 3 error:', tier3Error);
+        console.error('❌ Tier 3 error stack:', tier3Error.stack);
+        throw tier3Error;
+      }
     } else {
       // Invalid tier, default to Tier 1
       console.log('⚠️ Invalid tier, defaulting to Tier 1');
