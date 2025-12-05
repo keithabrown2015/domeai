@@ -230,35 +230,37 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
     }
 
     const responseData = await response.json();
-    console.log('📦 ray-live: Responses API response structure:', JSON.stringify(responseData).substring(0, 500));
+    console.log('📦 ray-live: Responses API response received');
     
-    // Parse Responses API output
-    const firstOutput = responseData.output?.[0]?.content?.[0];
+    // Parse Responses API output to extract reply text
+    const first = responseData.output?.[0]?.content?.[0];
     let replyText: string = '';
-    let sources: string[] = [];
 
-    if (firstOutput && firstOutput.type === 'output_text') {
-      replyText = firstOutput.text;
-    } else if (firstOutput && 'message' in firstOutput && typeof (firstOutput as any).message === 'string') {
-      replyText = (firstOutput as any).message;
+    if (first && first.type === 'output_text') {
+      replyText = first.text;
+    } else if (first && 'message' in first && typeof (first as any).message === 'string') {
+      replyText = (first as any).message;
     } else {
-      replyText = JSON.stringify(firstOutput ?? responseData);
+      // Fallback: try to extract text from the response structure
+      replyText = JSON.stringify(first ?? responseData);
+      console.warn('⚠️ ray-live: Could not extract text from expected format, using fallback');
     }
 
-    // Extract sources if available
+    if (!replyText || replyText.trim().length === 0) {
+      throw new Error('No reply text found in Responses API response');
+    }
+
+    // Extract sources from Responses API
+    let sources: string[] = [];
     if (responseData.sources && Array.isArray(responseData.sources)) {
       sources = responseData.sources;
     } else {
-      // Try to extract URLs from the response text
+      // Fallback: try to extract URLs from the reply text
       const urlRegex = /https?:\/\/[^\s]+/g;
       const matches = replyText.match(urlRegex);
       if (matches) {
         sources = matches.slice(0, 5);
       }
-    }
-
-    if (!replyText) {
-      throw new Error('No reply text found in Responses API response');
     }
 
     console.log('✅ ray-live: Reply generated:', replyText.substring(0, 100));
