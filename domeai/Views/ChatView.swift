@@ -38,29 +38,28 @@ struct ChatView: View {
                                                 maxWidth: geometry.size.width * 0.75
                                             )
                                             .id(message.id)
+                                            .rotationEffect(.degrees(180))
+                                            .scaleEffect(x: -1, y: 1, anchor: .center)
                                         }
                                         
                                         if viewModel.isProcessing {
                                             TypingIndicatorBubble()
                                                 .id("thinking")
+                                                .rotationEffect(.degrees(180))
+                                                .scaleEffect(x: -1, y: 1, anchor: .center)
                                         }
                                         
                                         Color.clear
                                             .frame(height: 1)
                                             .id("BOTTOM_ANCHOR")
+                                            .rotationEffect(.degrees(180))
+                                            .scaleEffect(x: -1, y: 1, anchor: .center)
                                     }
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 12)
                                 }
-                                .defaultScrollAnchor(.bottom)
-                                .onAppear {
-                                    proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
-                                }
-                                .onReceive(Just(viewModel.messages.count)) { _ in
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
-                                    }
-                                }
+                                .rotationEffect(.degrees(180))
+                                .scaleEffect(x: -1, y: 1, anchor: .center)
                             }
                             .overlay(alignment: .bottom) {
                                 Button {
