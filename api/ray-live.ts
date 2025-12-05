@@ -158,12 +158,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Get current date for system prompt
     const now = new Date();
     const isoNow = now.toISOString();
+    const today = new Date().toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    });
 
     // Build system prompt with userProfile
     const userProfileSection = formatUserProfile(userProfile);
     const systemPrompt = `You are Ray, a helpful, reliable AI assistant living inside DomeAI. You help users organize their knowledge, tasks, and life using the Dome filing system.${userProfileSection}
 
-Today's date is: ${isoNow}. Interpret 'this week', 'yesterday', 'last night' relative to this date.
+Today is ${today}. Today's date is: ${isoNow}. Interpret 'this week', 'yesterday', 'last night' relative to this date.
 
 You excel at answering questions about current events, news, live data, recent happenings, and real-time information.
 
@@ -258,7 +264,7 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        tools: [{ type: 'web_search' }],
+        tools: [{ type: 'web_search_preview' }],
         input: inputMessages
       })
     });
