@@ -33,29 +33,33 @@ struct ChatView: View {
                                             maxWidth: geometry.size.width * 0.75
                                         )
                                         .id(message.id)
-                                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                            Button(role: .destructive, action: {
-                                                pendingDeleteMessage = message
-                                            }) {
-                                                Label("Delete", systemImage: "trash")
-                                            }
-                                        }
                                     }
                                     
-                                    // Ray is thinking indicator with animated dots
+                                    // Ray is thinking indicator
                                     if viewModel.isProcessing {
                                         TypingIndicatorBubble()
                                             .id("thinking")
                                             .transition(.opacity.combined(with: .scale))
                                     }
+                                    
+                                    // Bottom anchor - MUST be last
+                                    Color.clear
+                                        .frame(height: 1)
+                                        .id("bottomAnchor")
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
                             }
+                            .onAppear {
+                                // Scroll to bottom when chat opens
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                }
+                            }
                             .onChange(of: viewModel.messages.count) { _, _ in
                                 if let lastMessage = viewModel.messages.last {
                                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                                        proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                                        proxy.scrollTo("bottomAnchor", anchor: .bottom)
                                     }
                                 }
                             }
@@ -67,6 +71,25 @@ struct ChatView: View {
                                         }
                                     }
                                 }
+                            }
+                            .overlay(alignment: .bottom) {
+                                // Scroll to bottom button - always visible
+                                Button(action: {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                        proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                    }
+                                }) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(.ultraThinMaterial)
+                                            .frame(width: 44, height: 44)
+                                            .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 2)
+                                        Image(systemName: "chevron.down")
+                                            .font(.system(size: 18, weight: .semibold))
+                                            .foregroundColor(.white)
+                                    }
+                                }
+                                .padding(.bottom, 80)
                             }
                         }
                         
