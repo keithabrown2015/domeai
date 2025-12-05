@@ -12,6 +12,7 @@ struct ChatView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var micButtonScale: CGFloat = 1.0
     @State private var pendingDeleteMessage: Message? = nil
+    @State private var showScrollButton = false
     
     var body: some View {
         NavigationStack {
@@ -42,10 +43,20 @@ struct ChatView: View {
                                             .transition(.opacity.combined(with: .scale))
                                     }
                                     
-                                    // Bottom anchor - MUST be last
-                                    Color.clear
-                                        .frame(height: 1)
-                                        .id("bottomAnchor")
+                                    // Bottom anchor with visibility detector
+                                    GeometryReader { geo -> Color in
+                                        DispatchQueue.main.async {
+                                            let show = geo.frame(in: .global).minY > UIScreen.main.bounds.height
+                                            if show != showScrollButton {
+                                                withAnimation(.easeInOut(duration: 0.2)) {
+                                                    showScrollButton = show
+                                                }
+                                            }
+                                        }
+                                        return Color.clear
+                                    }
+                                    .frame(height: 1)
+                                    .id("bottomAnchor")
                                 }
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 12)
@@ -53,13 +64,13 @@ struct ChatView: View {
                             .onAppear {
                                 // Scroll to bottom when chat opens
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                    proxy.scrollTo("bottomAnchor", anchor: .top)
                                 }
                             }
                             .onChange(of: viewModel.messages.count) { _, _ in
                                 if let lastMessage = viewModel.messages.last {
                                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                                        proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                        proxy.scrollTo("bottomAnchor", anchor: .top)
                                     }
                                 }
                             }
@@ -73,23 +84,26 @@ struct ChatView: View {
                                 }
                             }
                             .overlay(alignment: .bottom) {
-                                // Scroll to bottom button - always visible
-                                Button(action: {
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                        proxy.scrollTo("bottomAnchor", anchor: .bottom)
+                                // Scroll to bottom button
+                                if showScrollButton {
+                                    Button(action: {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                            proxy.scrollTo("bottomAnchor", anchor: .top)
+                                        }
+                                    }) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(.ultraThinMaterial)
+                                                .frame(width: 44, height: 44)
+                                                .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 2)
+                                            Image(systemName: "chevron.down")
+                                                .font(.system(size: 18, weight: .semibold))
+                                                .foregroundColor(.white)
+                                        }
                                     }
-                                }) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(.ultraThinMaterial)
-                                            .frame(width: 44, height: 44)
-                                            .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 2)
-                                        Image(systemName: "chevron.down")
-                                            .font(.system(size: 18, weight: .semibold))
-                                            .foregroundColor(.white)
-                                    }
+                                    .padding(.bottom, 80)
+                                    .transition(.opacity)
                                 }
-                                .padding(.bottom, 80)
                             }
                         }
                         
