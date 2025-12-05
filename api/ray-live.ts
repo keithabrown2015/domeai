@@ -233,42 +233,61 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
     console.log('📦 ray-live: Responses API response received');
     
     // Extract the final answer text, ignoring web_search_call objects
-    const out = responseData?.output ?? [];
+    // Look at response.output, then item.content, find LAST output_text (after tool calls)
     let replyText = "Sorry, I couldn't find an answer.";
-
-    // Scan through all output items to find the first output_text content
-    for (const item of out) {
-      if (!item?.content) continue;
+    
+    // Handle different possible response structures
+    const outputArray = Array.isArray(responseData?.output) 
+      ? responseData.output 
+      : (responseData?.output ? [responseData.output] : []);
+    
+    // Collect all output_text items (we want the LAST one, after tool calls)
+    const textItems: string[] = [];
+    
+    // Scan through all output items
+    for (const item of outputArray) {
+      if (!item || typeof item !== 'object') continue;
       
-      for (const c of item.content) {
-        // Skip web_search_call objects - we only want the final answer text
-        if (c?.type === "web_search_call") {
+      // Check if item has content array
+      const contentArray = Array.isArray(item.content) ? item.content : [];
+      
+      // Scan through content array
+      for (const c of contentArray) {
+        if (!c || typeof c !== 'object') continue;
+        
+        // Skip web_search_call objects completely - NEVER use these
+        if (c.type === "web_search_call" || c.type === "tool_call" || c.type === "tool_use") {
           continue;
         }
         
-        // Look for output_text type with text field
-        if (c?.type === "output_text" && typeof c.text === "string") {
-          replyText = c.text;
-          break;
+        // Collect output_text items
+        if (c.type === "output_text" && typeof c.text === "string" && c.text.trim().length > 0) {
+          const textValue = c.text.trim();
+          // Ensure we're not accidentally getting a JSON string
+          if (!textValue.startsWith('{') || !textValue.includes('"type":"web_search_call"')) {
+            textItems.push(textValue);
+          }
         }
       }
-      
-      // If we found the answer text, stop searching
-      if (replyText !== "Sorry, I couldn't find an answer.") {
-        break;
-      }
+    }
+    
+    // Use the LAST output_text item (final answer comes after tool calls)
+    if (textItems.length > 0) {
+      replyText = textItems[textItems.length - 1];
     }
 
-    // Fallback: check if output_text is directly on responseData
-    if (replyText === "Sorry, I couldn't find an answer." && typeof responseData?.output_text === "string") {
-      replyText = responseData.output_text;
-    }
-
-    if (!replyText || replyText.trim().length === 0 || replyText === "Sorry, I couldn't find an answer.") {
+    // Final validation: ensure we have actual text, not JSON or empty string
+    const trimmedReply = replyText.trim();
+    if (replyText === "Sorry, I couldn't find an answer." || 
+        trimmedReply.length === 0 ||
+        (trimmedReply.startsWith('{') && trimmedReply.includes('"type":"web_search_call"'))) {
       console.error('❌ ray-live: Could not extract answer text from response');
-      console.error('❌ ray-live: Response structure:', JSON.stringify(responseData).substring(0, 1000));
+      console.error('❌ ray-live: Response structure:', JSON.stringify(responseData).substring(0, 2000));
       throw new Error('No reply text found in Responses API response');
     }
+    
+    // Final safety check: ensure replyText is a clean string, not a JSON object
+    replyText = trimmedReply;
 
     // Extract sources from Responses API
     let sources: string[] = [];
