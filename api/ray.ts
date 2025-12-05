@@ -28,11 +28,11 @@ async function answerUserQuestionWithWebSearch(
   conversationHistory: ChatMessage[] | undefined,
   systemPrompt: string,
   openaiApiKey: string,
-  model: string = 'gpt-4o'
+  model: string = 'gpt-4o-mini'
 ): Promise<{ message: string; sources: string[] }> {
   console.log("Ray called OpenAI with web_search for this message:", userMessage.substring(0, 100));
 
-  // ALWAYS use Responses API with web_search tool
+  // Try Responses API first, but fallback gracefully to Chat Completions
   try {
     // Build input array with system prompt and conversation history
     const inputMessages: Array<{ role: string; content: string }> = [];
@@ -71,62 +71,112 @@ async function answerUserQuestionWithWebSearch(
 
     if (response.ok) {
       const responseData = await response.json();
-      // Extract message from Responses API format
-      const output = responseData.output?.[0]?.content?.[0];
-      if (output) {
-        const text = output.type === 'output_text' ? output.text : JSON.stringify(output);
-        const sources = responseData.sources || [];
+      console.log('📦 Responses API response structure:', JSON.stringify(responseData).substring(0, 500));
+      
+      // Try multiple ways to extract the text
+      let text: string = '';
+      let sources: string[] = [];
+      
+      // Method 1: Check for output_text directly
+      if (responseData.output_text && typeof responseData.output_text === 'string') {
+        text = responseData.output_text;
+      }
+      // Method 2: Check for output array with content
+      else if (responseData.output && Array.isArray(responseData.output) && responseData.output.length > 0) {
+        const firstOutput = responseData.output[0];
+        if (firstOutput.content && Array.isArray(firstOutput.content) && firstOutput.content.length > 0) {
+          const firstContent = firstOutput.content[0];
+          if (firstContent.type === 'output_text' && firstContent.text) {
+            text = firstContent.text;
+          } else if (firstContent.message && typeof firstContent.message === 'string') {
+            text = firstContent.message;
+          } else if (typeof firstContent === 'string') {
+            text = firstContent;
+          } else {
+            text = JSON.stringify(firstContent);
+          }
+        } else if (firstOutput.text && typeof firstOutput.text === 'string') {
+          text = firstOutput.text;
+        } else if (typeof firstOutput === 'string') {
+          text = firstOutput;
+        }
+      }
+      // Method 3: Check for message field
+      else if (responseData.message && typeof responseData.message === 'string') {
+        text = responseData.message;
+      }
+      
+      // Extract sources
+      if (responseData.sources && Array.isArray(responseData.sources)) {
+        sources = responseData.sources;
+      }
+      
+      if (text) {
         console.log('✅ OpenAI Responses API with web_search completed');
         return { message: text, sources };
+      } else {
+        console.warn('⚠️ Responses API returned OK but no text found, falling back');
+        throw new Error('No text found in Responses API response');
       }
+    } else {
+      // Responses API returned error
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error(`❌ Responses API error: ${response.status} - ${errorText}`);
+      throw new Error(`Responses API returned ${response.status}: ${errorText}`);
     }
+  } catch (error: any) {
+    console.log('⚠️ Responses API not available or failed, falling back to Chat Completions');
+    console.error('OpenAI error in Ray handler:', error);
     
-    // If Responses API returned non-OK, throw to fallback
-    const errorText = await response.text();
-    throw new Error(`Responses API returned ${response.status}: ${errorText}`);
-  } catch (error) {
-    console.log('⚠️ Responses API not available, falling back to Chat Completions');
-    console.error('Error:', error);
-    
-    // Fallback: Use Chat Completions API (but this won't have web_search)
-    const messages = buildChatMessages({
-      systemPrompt: systemPrompt + '\n\nIMPORTANT: Use current, up-to-date information from web sources when answering.',
-      conversationHistory,
-      newUserMessage: userMessage
-    });
+    // Fallback: Use Chat Completions API with web search instructions
+    try {
+      const messages = buildChatMessages({
+        systemPrompt: systemPrompt + '\n\nIMPORTANT: Use current, up-to-date information from web sources when answering. Search the web for recent information if needed.',
+        conversationHistory,
+        newUserMessage: userMessage
+      });
 
-    const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openaiApiKey}`
-      },
-      body: JSON.stringify({
-        model: model,
-        messages,
-        temperature: 0.7,
-        max_tokens: 2000
-      })
-    });
+      const chatResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiApiKey}`
+        },
+        body: JSON.stringify({
+          model: model,
+          messages,
+          temperature: 0.7,
+          max_tokens: 2000
+        })
+      });
 
-    if (!chatResponse.ok) {
-      const errorText = await chatResponse.text();
-      throw new Error(`OpenAI API error: ${chatResponse.status} - ${errorText}`);
+      if (!chatResponse.ok) {
+        const errorText = await chatResponse.text();
+        console.error(`❌ Chat Completions API error: ${chatResponse.status} - ${errorText}`);
+        throw new Error(`OpenAI Chat Completions API error: ${chatResponse.status} - ${errorText}`);
+      }
+
+      const chatData = await chatResponse.json();
+      const message = extractContent(chatData);
+      
+      if (!message) {
+        throw new Error('No message content returned from Chat Completions API');
+      }
+      
+      // Try to extract URLs from the response text
+      const sources: string[] = [];
+      const urlRegex = /https?:\/\/[^\s]+/g;
+      const matches = message.match(urlRegex);
+      if (matches) {
+        sources.push(...matches.slice(0, 5));
+      }
+
+      console.log('✅ Fallback Chat Completions response generated');
+      return { message, sources };
+    } catch (fallbackError: any) {
+      console.error('❌ Both Responses API and Chat Completions failed:', fallbackError);
+      throw fallbackError;
     }
-
-    const chatData = await chatResponse.json();
-    const message = extractContent(chatData);
-    
-    // Try to extract URLs from the response text
-    const sources: string[] = [];
-    const urlRegex = /https?:\/\/[^\s]+/g;
-    const matches = message.match(urlRegex);
-    if (matches) {
-      sources.push(...matches.slice(0, 5));
-    }
-
-    console.log('✅ Fallback Chat Completions response generated');
-    return { message, sources };
   }
 }
 
@@ -1109,9 +1159,12 @@ You have access to the recent conversation history below (last ${MAX_HISTORY_MES
 
   } catch (error: any) {
     console.error('❌ Error in /api/ray:', error);
+    console.error('❌ Error stack:', error.stack);
+    console.error('❌ Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
     return res.status(500).json({
       error: 'Internal server error',
-      message: error.message || 'An unexpected error occurred'
+      message: error.message || 'An unexpected error occurred',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 }
