@@ -13,59 +13,70 @@ struct ChatView: View {
     @EnvironmentObject var viewModel: ChatViewModel
     @State private var micButtonScale: CGFloat = 1.0
     @State private var pendingDeleteMessage: Message? = nil
-    @State private var showScrollButton = false
-    @State private var hasScrolledToBottom = false
+    @State private var shouldAutoScroll = true
     
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
                 ZStack {
-                    // Black background
                     Color.black
                         .ignoresSafeArea()
                     
                     VStack(spacing: 0) {
-                        // Main chat area
+                        // MARK: - Chat Messages ScrollView
                         ScrollViewReader { proxy in
-                            VStack(spacing: 0) {
-                                ScrollView {
-                                    VStack(spacing: 8) {
-                                        ForEach(viewModel.messages) { message in
-                                            let index = viewModel.messages.firstIndex(where: { $0.id == message.id }) ?? 0
-                                            MessageWithTimestampView(
-                                                message: message,
-                                                previousMessage: index > 0 ? viewModel.messages[index - 1] : nil,
-                                                maxWidth: geometry.size.width * 0.75
-                                            )
-                                            .id(message.id)
-                                            .rotationEffect(.degrees(180))
-                                            .scaleEffect(x: -1, y: 1, anchor: .center)
-                                        }
-                                        
-                                        if viewModel.isProcessing {
-                                            TypingIndicatorBubble()
-                                                .id("thinking")
-                                                .rotationEffect(.degrees(180))
-                                                .scaleEffect(x: -1, y: 1, anchor: .center)
-                                        }
-                                        
-                                        Color.clear
-                                            .frame(height: 1)
-                                            .id("BOTTOM_ANCHOR")
-                                            .rotationEffect(.degrees(180))
-                                            .scaleEffect(x: -1, y: 1, anchor: .center)
+                            ScrollView {
+                                LazyVStack(spacing: 8) {
+                                    ForEach(viewModel.messages) { message in
+                                        let index = viewModel.messages.firstIndex(where: { $0.id == message.id }) ?? 0
+                                        MessageWithTimestampView(
+                                            message: message,
+                                            previousMessage: index > 0 ? viewModel.messages[index - 1] : nil,
+                                            maxWidth: geometry.size.width * 0.75
+                                        )
+                                        .id(message.id)
                                     }
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 12)
+                                    
+                                    if viewModel.isProcessing {
+                                        TypingIndicatorBubble()
+                                            .id("typing-indicator")
+                                    }
+                                    
+                                    // Invisible anchor at the very bottom
+                                    Color.clear
+                                        .frame(height: 1)
+                                        .id("bottom")
                                 }
-                                .rotationEffect(.degrees(180))
-                                .scaleEffect(x: -1, y: 1, anchor: .center)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
                             }
-                            .overlay(alignment: .bottom) {
+                            // iOS 17+ default anchor
+                            .defaultScrollAnchor(.bottom)
+                            // Scroll to bottom when view first appears
+                            .onAppear {
+                                scrollToBottom(proxy: proxy, animated: false)
+                            }
+                            // Scroll to bottom when messages change
+                            .onChange(of: viewModel.messages.count) { _, _ in
+                                scrollToBottom(proxy: proxy, animated: true)
+                            }
+                            // Scroll to bottom when processing state changes (typing indicator appears)
+                            .onChange(of: viewModel.isProcessing) { _, isProcessing in
+                                if isProcessing {
+                                    scrollToBottom(proxy: proxy, animated: true)
+                                }
+                            }
+                            // Extra insurance: scroll after a delay to handle async message loading
+                            .task {
+                                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                                await MainActor.run {
+                                    scrollToBottom(proxy: proxy, animated: false)
+                                }
+                            }
+                            .overlay(alignment: .bottomTrailing) {
+                                // Scroll to bottom button
                                 Button {
-                                    withAnimation(.easeOut(duration: 0.2)) {
-                                        proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
-                                    }
+                                    scrollToBottom(proxy: proxy, animated: true)
                                 } label: {
                                     Image(systemName: "chevron.down")
                                         .font(.system(size: 18, weight: .bold))
@@ -74,13 +85,12 @@ struct ChatView: View {
                                         .background(Circle().fill(Color.blue))
                                         .shadow(radius: 4)
                                 }
-                                .padding(.bottom, 80)
+                                .padding(.trailing, 16)
+                                .padding(.bottom, 16)
                             }
                         }
                         
-                        Spacer()
-                        
-                        // Recognized text bubble while recording
+                        // MARK: - Recording Text Preview
                         if viewModel.isRecording && !viewModel.recognizedText.isEmpty {
                             HStack {
                                 Text(viewModel.recognizedText)
@@ -90,7 +100,7 @@ struct ChatView: View {
                                     .padding(.vertical, 12)
                                     .background(
                                         RoundedRectangle(cornerRadius: 18)
-                                            .fill(Color(red: 0.17, green: 0.17, blue: 0.18)) // #3A3A3C
+                                            .fill(Color(red: 0.17, green: 0.17, blue: 0.18))
                                     )
                                     .frame(maxWidth: geometry.size.width * 0.75, alignment: .leading)
                                 Spacer()
@@ -100,7 +110,7 @@ struct ChatView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                         
-                        // Attachment Thumbnail (just above input bar)
+                        // MARK: - Attachment Thumbnail
                         if viewModel.currentAttachment != nil {
                             AttachmentThumbnailView()
                                 .padding(.horizontal, 16)
@@ -108,14 +118,12 @@ struct ChatView: View {
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                         
-                        // Bottom input area
+                        // MARK: - Bottom Input Bar
                         HStack(spacing: 12) {
-                            // Paperclip button
                             AttachmentButton()
                             
                             Spacer()
                             
-                            // Microphone button
                             Button {
                                 toggleRecording()
                             } label: {
@@ -141,9 +149,7 @@ struct ChatView: View {
                         .frame(height: 60)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 12)
-                        .background(
-                            Color(red: 0.11, green: 0.11, blue: 0.12) // Dark gray input bar
-                        )
+                        .background(Color(red: 0.11, green: 0.11, blue: 0.12))
                     }
                 }
                 .navigationTitle("Ray 💬")
@@ -163,10 +169,22 @@ struct ChatView: View {
         }
     }
     
-    // Test function for direct API testing
+    // MARK: - Scroll Helper
+    private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            } else {
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+        }
+    }
+    
+    // MARK: - Test Connection
     private func testOpenAIConnection() {
         print("🧪 TEST: Starting OpenAI connection test")
-        // Config.testKeys() // Removed - debug function no longer needed
         
         Task {
             do {
@@ -177,7 +195,6 @@ struct ChatView: View {
                 )
                 print("🧪 TEST RESPONSE: \(response)")
                 
-                // Add test response to chat
                 await MainActor.run {
                     let testMessage = Message(content: "🧪 TEST: \(response)", isFromUser: false)
                     viewModel.messages.append(testMessage)
@@ -226,7 +243,6 @@ private struct MessageBubble: View {
             }
             
             VStack(alignment: message.isFromUser ? .trailing : .leading, spacing: 4) {
-                // Display image if present
                 if let imageData = message.attachmentData,
                    message.attachmentType == "image",
                    let uiImage = UIImage(data: imageData) {
@@ -238,7 +254,6 @@ private struct MessageBubble: View {
                         .padding(.bottom, 4)
                 }
                 
-                // Display text content
                 if !message.content.isEmpty {
                     Text(message.content)
                         .font(.system(size: 16, weight: .regular))
@@ -247,9 +262,9 @@ private struct MessageBubble: View {
                         .padding(.vertical, 12)
                         .background(
                             RoundedRectangle(cornerRadius: 18)
-                                .fill(message.isFromUser ? 
-                                      Color(red: 0.0, green: 0.48, blue: 1.0) : // #007AFF
-                                      Color(red: 0.23, green: 0.23, blue: 0.24)  // #3A3A3C
+                                .fill(message.isFromUser ?
+                                      Color(red: 0.0, green: 0.48, blue: 1.0) :
+                                      Color(red: 0.23, green: 0.23, blue: 0.24)
                                 )
                         )
                         .frame(maxWidth: maxWidth, alignment: message.isFromUser ? .trailing : .leading)
@@ -299,7 +314,6 @@ private struct MessageBubble: View {
 
 // MARK: - Timestamp Wrapper
 
-/// Wraps a message bubble with an optional timestamp shown when enough time passed since previous message.
 private struct MessageWithTimestampView: View {
     let message: Message
     let previousMessage: Message?
@@ -329,7 +343,6 @@ private struct MessageWithTimestampView: View {
         .padding(.horizontal, 4)
     }
     
-    /// Only show timestamp when >5 minutes elapsed since previous message.
     private var shouldShowTimestamp: Bool {
         guard let previous = previousMessage else { return true }
         let difference = message.timestamp.timeIntervalSince(previous.timestamp)
@@ -351,11 +364,9 @@ struct UserMessageActions: View {
                 UIPasteboard.general.string = message.content
                 showCopiedFeedback = true
                 
-                // Haptic feedback
                 let impact = UIImpactFeedbackGenerator(style: .medium)
                 impact.impactOccurred()
                 
-                // Reset after 2 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     showCopiedFeedback = false
                 }
@@ -383,16 +394,13 @@ struct RayMessageActions: View {
     
     var body: some View {
         HStack(spacing: 16) {
-            // Copy button
             Button {
                 UIPasteboard.general.string = message.content
                 showCopiedFeedback = true
                 
-                // Haptic feedback
                 let impact = UIImpactFeedbackGenerator(style: .medium)
                 impact.impactOccurred()
                 
-                // Reset after 2 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     showCopiedFeedback = false
                 }
@@ -405,13 +413,10 @@ struct RayMessageActions: View {
                 .foregroundColor(showCopiedFeedback ? .green : .gray)
             }
             
-            // Read aloud button
             Button {
-                // Haptic feedback
                 let impact = UIImpactFeedbackGenerator(style: .medium)
                 impact.impactOccurred()
                 
-                // Read aloud
                 TextToSpeechService.shared.speak(text: message.content)
             } label: {
                 HStack(spacing: 4) {
@@ -422,12 +427,10 @@ struct RayMessageActions: View {
                 .foregroundColor(.gray)
             }
             
-            // Share button
             Button {
                 shareMessage(message.content)
                 showSharedFeedback = true
                 
-                // Haptic feedback
                 let impact = UIImpactFeedbackGenerator(style: .medium)
                 impact.impactOccurred()
                 
@@ -443,7 +446,6 @@ struct RayMessageActions: View {
                 .foregroundColor(showSharedFeedback ? .green : .gray)
             }
             
-            // Sources button (only if message has sources)
             if let sources = message.sources, !sources.isEmpty {
                 Button {
                     viewModel.showSources(for: message)
@@ -470,28 +472,10 @@ struct RayMessageActions: View {
             rootVC.present(av, animated: true)
         }
     }
-    
-    private func findPreviousUserMessage(for rayMessage: Message) -> Message? {
-        // Find the user message that generated this Ray response
-        // It should be the last user message before this Ray message
-        guard let rayIndex = viewModel.messages.firstIndex(where: { $0.id == rayMessage.id }) else {
-            return nil
-        }
-        
-        // Look backwards from the Ray message to find the previous user message
-        for i in (0..<rayIndex).reversed() {
-            if viewModel.messages[i].isFromUser {
-                return viewModel.messages[i]
-            }
-        }
-        
-        return nil
-    }
 }
 
 // MARK: - Typing Indicator Bubble
 
-/// Animated typing bubble that mimics modern chat apps while Ray is processing.
 struct TypingIndicatorBubble: View {
     @State private var isAnimating = false
     
@@ -502,7 +486,6 @@ struct TypingIndicatorBubble: View {
     
     var body: some View {
         HStack(alignment: .bottom) {
-            // Align to left like Ray's messages
             VStack(alignment: .leading) {
                 HStack(spacing: 6) {
                     ForEach(0..<3) { index in
@@ -518,7 +501,6 @@ struct TypingIndicatorBubble: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(
-                    // Ray-style light bubble with rounded corners
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .fill(bubbleBackground)
                         .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
@@ -539,7 +521,6 @@ struct TypingIndicatorBubble: View {
     }
 }
 
-/// Single animated dot used in the typing indicator.
 private struct TypingDot: View {
     let delay: Double
     @Binding var isAnimating: Bool
