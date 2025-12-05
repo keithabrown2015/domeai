@@ -27,114 +27,52 @@ struct ChatView: View {
                     VStack(spacing: 0) {
                         // Main chat area
                         ScrollViewReader { proxy in
-                            ScrollView {
-                                VStack(spacing: 8) {
-                                    ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
-                                        MessageWithTimestampView(
-                                            message: message,
-                                            previousMessage: index > 0 ? viewModel.messages[index - 1] : nil,
-                                            maxWidth: geometry.size.width * 0.75
-                                        )
-                                        .id(message.id)
-                                    }
-                                    
-                                    if viewModel.isProcessing {
-                                        TypingIndicatorBubble()
-                                            .id("thinking")
-                                            .transition(.opacity.combined(with: .scale))
-                                    }
-                                    
-                                    // Bottom anchor - invisible spacer at the end with scroll detection
-                                    GeometryReader { geo -> Color in
-                                        let frame = geo.frame(in: .global)
-                                        // Check if bottom anchor is visible (within screen bounds)
-                                        let isVisible = frame.minY < UIScreen.main.bounds.height && frame.maxY > 0
-                                        
-                                        DispatchQueue.main.async {
-                                            // Show button when bottom anchor is NOT visible (user scrolled up)
-                                            if showScrollButton != !isVisible {
-                                                withAnimation(.easeInOut(duration: 0.2)) {
-                                                    showScrollButton = !isVisible
-                                                }
-                                            }
+                            VStack(spacing: 0) {
+                                ScrollView {
+                                    VStack(spacing: 8) {
+                                        ForEach(viewModel.messages) { message in
+                                            let index = viewModel.messages.firstIndex(where: { $0.id == message.id }) ?? 0
+                                            MessageWithTimestampView(
+                                                message: message,
+                                                previousMessage: index > 0 ? viewModel.messages[index - 1] : nil,
+                                                maxWidth: geometry.size.width * 0.75
+                                            )
+                                            .id(message.id)
                                         }
                                         
-                                        return Color.clear
+                                        if viewModel.isProcessing {
+                                            TypingIndicatorBubble()
+                                                .id("thinking")
+                                        }
+                                        
+                                        Color.clear
+                                            .frame(height: 1)
+                                            .id("BOTTOM_ANCHOR")
                                     }
-                                    .frame(height: 1)
-                                    .id("bottomAnchor")
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
                                 }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 12)
-                            }
-                            .onAppear {
-                                if let last = viewModel.messages.last {
+                                .onAppear {
+                                    proxy.scrollTo("BOTTOM_ANCHOR")
+                                }
+                                .onReceive(Just(viewModel.messages.count)) { _ in
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        proxy.scrollTo(last.id, anchor: .bottom)
-                                    }
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                        proxy.scrollTo(last.id, anchor: .bottom)
-                                    }
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                                        proxy.scrollTo(last.id, anchor: .bottom)
-                                    }
-                                }
-                            }
-                            .onChange(of: viewModel.messages) { oldMessages, newMessages in
-                                // First load - messages went from empty to having content
-                                if oldMessages.isEmpty && !newMessages.isEmpty {
-                                    if let last = newMessages.last {
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                            proxy.scrollTo(last.id, anchor: .bottom)
-                                        }
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                            proxy.scrollTo(last.id, anchor: .bottom)
-                                        }
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                                            proxy.scrollTo(last.id, anchor: .bottom)
-                                        }
-                                    }
-                                }
-                            }
-                            .onChange(of: viewModel.messages.count) { _, _ in
-                                // Auto-scroll to bottom when new message arrives
-                                if let last = viewModel.messages.last {
-                                    withAnimation(.easeOut(duration: 0.2)) {
-                                        proxy.scrollTo(last.id, anchor: .bottom)
-                                    }
-                                }
-                            }
-                            .onChange(of: viewModel.isProcessing) { _, isProcessing in
-                                if isProcessing {
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        withAnimation {
-                                            proxy.scrollTo("thinking", anchor: .bottom)
-                                        }
+                                        proxy.scrollTo("BOTTOM_ANCHOR")
                                     }
                                 }
                             }
                             .overlay(alignment: .bottom) {
-                                if showScrollButton {
-                                    Button(action: {
-                                        if let last = viewModel.messages.last {
-                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                                                proxy.scrollTo(last.id, anchor: .bottom)
-                                            }
-                                        }
-                                    }) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(.ultraThinMaterial)
-                                                .frame(width: 44, height: 44)
-                                                .shadow(color: .black.opacity(0.3), radius: 6)
-                                            Image(systemName: "chevron.down")
-                                                .font(.system(size: 18, weight: .semibold))
-                                                .foregroundColor(.white)
-                                        }
-                                    }
-                                    .padding(.bottom, 80)
-                                    .transition(.opacity.combined(with: .scale))
+                                Button {
+                                    proxy.scrollTo("BOTTOM_ANCHOR")
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 18, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .frame(width: 44, height: 44)
+                                        .background(Circle().fill(Color.blue))
+                                        .shadow(radius: 4)
                                 }
+                                .padding(.bottom, 80)
                             }
                         }
                         
