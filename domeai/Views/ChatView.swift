@@ -52,18 +52,13 @@ struct ChatView: View {
                                     .padding(.horizontal, 16)
                                     .padding(.vertical, 12)
                                 }
+                                .defaultScrollAnchor(.bottom)
                                 .onAppear {
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                        withAnimation(.none) {
-                                            proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
-                                        }
-                                    }
+                                    proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
                                 }
                                 .onReceive(Just(viewModel.messages.count)) { _ in
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                        withAnimation(.easeOut(duration: 0.2)) {
-                                            proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
-                                        }
+                                        proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
                                     }
                                 }
                             }
